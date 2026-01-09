@@ -8,7 +8,7 @@ import itertools
 import io
 
 # ==========================================
-# 1. 核心统计工具 (保持不变)
+# 1. 核心统计工具
 # ==========================================
 
 def get_stars(p_value):
@@ -68,7 +68,7 @@ def solve_clique_cld(means, pairwise_data):
                     adj[i, j] = False
                     adj[j, i] = False
 
-    # 移除自环 (关键修复)
+    # 移除自环
     np.fill_diagonal(adj, False)
 
     # Bron-Kerbosch 最大团算法
@@ -113,7 +113,7 @@ def solve_clique_cld(means, pairwise_data):
     return final_res
 
 # ==========================================
-# 2. 核心流程：全能分析 (主效应 + 切片)
+# 2. 核心流程：全能分析 (含标准差计算)
 # ==========================================
 
 def run_comprehensive_analysis(df, factors, targets, test_factor):
@@ -124,7 +124,7 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     for f in factors:
         work_df[f] = work_df[f].astype(str).str.strip()
         
-    # 分组因子 (用于切片比较的背景因子)
+    # 分组因子
     group_factors = [f for f in factors if f != test_factor]
     
     # 容器
@@ -151,24 +151,20 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     'Signif': get_stars(row['PR(>F)'])
                 })
             
-            # 获取全局 Pooled MSE (用于所有后续比较，保证检验效能一致)
+            # 获取全局 Pooled MSE
             global_mse = model.mse_resid
             global_df_resid = model.df_resid
             
             # --- B. 主效应比较 (Main Effects) ---
-            # 遍历每一个因子，计算整体均值差异
             for factor in factors:
-                # 1. 计算该因子的边际均值
                 stats = work_df.groupby(factor)[target].agg(['mean', 'count'])
                 
-                # 2. LSD 比较
                 if len(stats) < 2:
                     letters = {str(k).strip(): 'a' for k in stats.index}
                 else:
                     pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
                     letters = solve_clique_cld(stats['mean'], pairwise_res)
                 
-                # 3. 记录
                 for lvl in stats.index:
                     mean_val = stats.loc[lvl, 'mean']
                     lvl_str = str(lvl).strip()
@@ -184,34 +180,27 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     })
 
             # --- C. 组内切片比较 (Sliced Comparison) ---
-            # 逻辑：固定 group_factors，比较 test_factor
-            
-            # 确定遍历的分组
             if not group_factors:
-                iter_groups = [( "All", work_df )] # 单因素情况
+                iter_groups = [( "All", work_df )] 
             else:
                 iter_groups = work_df.groupby(group_factors)
 
             for group_keys, sub_df in iter_groups:
                 if not isinstance(group_keys, tuple): group_keys = (group_keys,)
                 
-                # 基础信息
                 current_info = {'Trait': target}
                 if group_factors:
                     for k, val in zip(group_factors, group_keys):
                         current_info[k] = str(val)
                 
-                # 计算待测因子的均值
                 stats = sub_df.groupby(test_factor)[target].agg(['mean', 'count'])
                 
-                # 比较
                 if len(stats) < 2:
                     letters = {str(k).strip(): 'a' for k in stats.index}
                 else:
                     pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
                     letters = solve_clique_cld(stats['mean'], pairwise_res)
                 
-                # 记录
                 for lvl in stats.index:
                     mean_val = stats.loc[lvl, 'mean']
                     lvl_str = str(lvl).strip()
@@ -225,7 +214,6 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     sliced_comparison_rows.append(row)
                     
         except Exception as e:
-            # print(f"Error in {target}: {e}")
             pass
 
     # --- D. 整理输出 ---
@@ -237,7 +225,6 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     if main_effects_rows:
         me_df = pd.DataFrame(main_effects_rows)
         results['main_effects'] = me_df
-        # Pivot: Index=Factor+Level, Col=Trait
         results['main_effects_pivot'] = me_df.pivot_table(
             index=['Factor', 'Level'], columns='Trait', values='Label', aggfunc='first'
         ).reset_index()
@@ -248,12 +235,10 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     # 3. 切片比较
     if sliced_comparison_rows:
         sliced_df = pd.DataFrame(sliced_comparison_rows)
-        # 整理列顺序
         cols = group_factors + [test_factor, 'Trait', 'Mean', 'Letter', 'Label']
         final_cols = [c for c in cols if c in sliced_df.columns]
         results['sliced_comparison'] = sliced_df[final_cols]
         
-        # Pivot
         pivot_index = group_factors + [test_factor]
         results['sliced_pivot'] = sliced_df.pivot_table(
             index=pivot_index, columns='Trait', values='Label', aggfunc='first'
@@ -280,15 +265,36 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     else:
         results['correlation'] = pd.DataFrame()
 
+    # --- E. 描述性统计 (标准差) ---
+    # 计算 Mean, Std, Count
+    # 对所有选定的因子组合进行聚合
+    try:
+        desc_df = work_df.groupby(factors)[targets].agg(['mean', 'std', 'count']).reset_index()
+        # 扁平化多级列索引 (例如: ('Yield', 'mean') -> 'Yield_Mean')
+        new_cols = []
+        for col in desc_df.columns.values:
+            if isinstance(col, tuple):
+                if col[1] == '':
+                    new_cols.append(col[0]) # 因子列
+                else:
+                    # 将指标和统计量合并，如 Yield_mean
+                    new_cols.append(f"{col[0]}_{col[1]}")
+            else:
+                new_cols.append(col)
+        desc_df.columns = new_cols
+        results['descriptive'] = desc_df
+    except Exception as e:
+        results['descriptive'] = pd.DataFrame()
+
     return results
 
 # ==========================================
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="农业统计平台 (全能版)", layout="wide", page_icon="🌾")
-st.title("🌾 简单的数据分析")
-st.info("✅ 功能：方差分析 | 主效应多重比较 | 组内比较 (固定主因子比较副因子) | 相关性分析")
+st.set_page_config(page_title="农业统计平台 (SD版)", layout="wide", page_icon="🌾")
+st.title("🌾 农业数据分析平台")
+st.info("✅ 功能更新：新增 **标准差 (SD)** 计算，单独展示在“描述性统计”页签。")
 
 with st.sidebar:
     st.header("1. 数据上传")
@@ -315,60 +321,67 @@ with st.sidebar:
             
             if factors:
                 st.markdown("👉 **步骤 2: 选择用于组内比较的因子**")
-                st.caption("例如：选“处理”，则分析会展示“品种A下的处理差异”、“品种B下的处理差异”。")
                 default_idx = len(factors) - 1
                 test_factor = st.selectbox("比较因子 (Test Factor)", factors, index=default_idx)
             
             st.markdown("👉 **步骤 3: 选择指标**")
             targets = st.multiselect("指标 (Y)", all_cols)
             
-            run_btn = st.button("开始全能分析", type="primary")
+            run_btn = st.button("开始分析", type="primary")
             
         except Exception as e:
             st.error(f"读取错误: {e}")
 
 if uploaded_file and factors and targets and test_factor and run_btn:
     st.divider()
-    with st.spinner("正在进行全方位分析..."):
+    with st.spinner("正在计算 (含标准差)..."):
         try:
             res = run_comprehensive_analysis(df, factors, targets, test_factor)
             
-            # 使用 Tabs 分开展示
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 主效应比较", "🔍 组内切片比较", "📑 方差分析", "🔗 相关性"])
+            # Tabs
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 主效应", "🔍 组内切片", "📈 描述性统计 (SD)", "📑 方差分析", "🔗 相关性"])
             
             with tab1:
-                st.subheader("1. 主效应比较 (Main Effects)")
-                st.caption("展示每个因子（如不同品种、不同处理）的整体均值差异，忽略其他因子的影响。")
+                st.subheader("1. 主效应比较")
                 if not res['main_effects_pivot'].empty:
                     st.dataframe(res['main_effects_pivot'], use_container_width=True)
-                    with st.expander("查看详细数据 (含 Mean 和 Letter 独立列)"):
+                    with st.expander("查看详细数据"):
                         st.dataframe(res['main_effects'], use_container_width=True)
                 else:
-                    st.warning("无数据生成")
+                    st.warning("无数据")
 
             with tab2:
-                st.subheader(f"2. 组内切片比较 (按 {test_factor} 进行比较)")
-                group_others = [f for f in factors if f != test_factor]
-                st.caption(f"展示在固定背景 ({' + '.join(group_others) if group_others else '无'}) 下，{test_factor} 的差异。")
-                
+                st.subheader(f"2. 组内切片比较 (按 {test_factor})")
                 if not res['sliced_pivot'].empty:
                     st.dataframe(res['sliced_pivot'], use_container_width=True)
-                    with st.expander("查看详细数据 (含 Mean 和 Letter 独立列)"):
+                    with st.expander("查看详细数据"):
                         st.dataframe(res['sliced_comparison'], use_container_width=True)
                 else:
-                    st.warning("无数据生成")
-                
+                    st.warning("无数据")
+
             with tab3:
-                st.subheader("3. 全模型方差分析表")
+                st.subheader("3. 描述性统计 (含标准差 SD)")
+                st.caption("展示各因子组合下的 均值(mean)、标准差(std) 和 样本量(count)。")
+                if not res['descriptive'].empty:
+                    st.dataframe(res['descriptive'], use_container_width=True)
+                else:
+                    st.warning("无法计算描述性统计")
+
+            with tab4:
+                st.subheader("4. 全模型方差分析表")
                 st.dataframe(res['anova'], use_container_width=True)
                 
-            with tab4:
-                st.subheader("4. 相关性分析")
+            with tab5:
+                st.subheader("5. 相关性分析")
                 st.dataframe(res['correlation'], use_container_width=True)
             
             # 导出
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer) as writer:
+                # 描述性统计 (SD)
+                if not res['descriptive'].empty:
+                    res['descriptive'].to_excel(writer, sheet_name='描述性统计(SD)', index=False)
+
                 # 主效应
                 if not res['main_effects_pivot'].empty: 
                     res['main_effects_pivot'].to_excel(writer, sheet_name='主效应_宽表', index=False)
@@ -388,14 +401,13 @@ if uploaded_file and factors and targets and test_factor and run_btn:
                     res['correlation'].to_excel(writer, sheet_name='相关分析')
                 
             st.download_button(
-                "📥 下载全能分析报告 (Excel)",
+                "📥 下载分析报告 (含标准差)",
                 data=buffer.getvalue(),
-                file_name="Comprehensive_Analysis_Report.xlsx",
+                file_name="Analysis_Report_With_SD.xlsx",
                 mime="application/vnd.ms-excel"
             )
             
         except Exception as e:
             st.error(f"分析失败: {e}")
             import traceback
-
             st.text(traceback.format_exc())
