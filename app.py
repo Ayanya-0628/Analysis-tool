@@ -287,8 +287,8 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
 # ==========================================
 
 st.set_page_config(page_title="农业统计平台 (全能版)", layout="wide", page_icon="🌾")
-st.title("🌾 农业数据分析平台 (ANOVA + Main Effects + Sliced LSD)")
-st.info("✅ 功能：全模型方差分析 | 主效应比较 | 组内切片比较 (固定主因子比较副因子) | 相关性分析")
+st.title("🌾 简单的数据分析")
+st.info("✅ 功能：方差分析 | 主效应多重比较 | 组内比较 (固定主因子比较副因子) | 相关性分析")
 
 with st.sidebar:
     st.header("1. 数据上传")
@@ -397,4 +397,5 @@ if uploaded_file and factors and targets and test_factor and run_btn:
         except Exception as e:
             st.error(f"分析失败: {e}")
             import traceback
+
             st.text(traceback.format_exc())
