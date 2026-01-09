@@ -41,7 +41,7 @@ def pairwise_lsd_test_with_mse(stats_df, mse, df_resid, alpha=0.05):
         
     return results
 
-def solve_clique_cld(means, pairwise_data):
+def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     """最大团算法生成字母标记"""
     groups = [str(g).strip() for g in means.index.tolist()]
     n = len(groups)
@@ -81,7 +81,12 @@ def solve_clique_cld(means, pairwise_data):
     
     clique_means.sort(key=lambda x: x[0], reverse=True)
     
-    letters_list = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    # 区分大小写
+    if use_uppercase:
+        letters_list = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    else:
+        letters_list = "abcdefghijklmnopqrstuvwxyz"
+        
     group_letters = {i: "" for i in range(n)}
     
     for idx, (avg, clq) in enumerate(clique_means):
@@ -98,7 +103,7 @@ def solve_clique_cld(means, pairwise_data):
     return final_res
 
 # ==========================================
-# 2. 核心流程：生成多级表头数据
+# 2. 核心流程：定制化列结构
 # ==========================================
 
 def run_comprehensive_analysis(df, factors, targets, test_factor):
@@ -111,14 +116,13 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
         
     group_factors = [f for f in factors if f != test_factor]
     
-    # 容器
     anova_rows = []
     main_effects_rows = []
     sliced_comparison_rows = []
     
     for target in targets:
         try:
-            # --- A. 全模型 ANOVA ---
+            # --- A. ANOVA ---
             formula = f"{target} ~ {' * '.join(factors)}"
             model = ols(formula, data=work_df).fit()
             
@@ -126,7 +130,6 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
             global_mse = model.mse_resid
             global_df_resid = model.df_resid
             
-            # 记录 ANOVA (F值+星号)
             for source, row in aov_table.iterrows():
                 if source == 'Residual': continue
                 f_str = f"{row['F']:.2f}{get_stars(row['PR(>F)'])}"
@@ -136,32 +139,35 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     'F_Sig': f_str
                 })
             
-            # --- B. 主效应 (分离 Mean, SD, Letter) ---
+            # --- B. 主效应 (大写字母) ---
             for factor in factors:
                 stats = work_df.groupby(factor)[target].agg(['mean', 'std', 'count']).fillna(0)
                 
                 if len(stats) < 2:
-                    letters = {str(k).strip(): 'a' for k in stats.index}
+                    letters = {str(k).strip(): 'A' for k in stats.index}
                 else:
                     pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
-                    letters = solve_clique_cld(stats['mean'], pairwise_res)
+                    # use_uppercase=True
+                    letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=True)
                 
                 for lvl in stats.index:
                     mean_val = stats.loc[lvl, 'mean']
                     sd_val = stats.loc[lvl, 'std']
                     lvl_str = str(lvl).strip()
-                    let = letters.get(lvl_str, 'a')
+                    let = letters.get(lvl_str, 'A')
+                    
+                    # 组合: Mean + Letter (大写)
+                    mean_let = f"{mean_val:.2f} {let}"
                     
                     main_effects_rows.append({
                         'Factor': factor,
                         'Level': lvl_str,
                         'Trait': target,
-                        'Mean': mean_val,
+                        'Mean_Letter': mean_let, 
                         'SD': sd_val,
-                        'Letter': let
                     })
 
-            # --- C. 切片比较 (分离 Mean, SD, Letter) ---
+            # --- C. 切片比较 (小写字母) ---
             if not group_factors:
                 iter_groups = [( "All", work_df )] 
             else:
@@ -181,7 +187,8 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     letters = {str(k).strip(): 'a' for k in stats.index}
                 else:
                     pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
-                    letters = solve_clique_cld(stats['mean'], pairwise_res)
+                    # use_uppercase=False
+                    letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=False)
                 
                 for lvl in stats.index:
                     mean_val = stats.loc[lvl, 'mean']
@@ -191,18 +198,23 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     
                     row = current_info.copy()
                     row[test_factor] = lvl_str
-                    # 独立列
+                    
+                    # 基础数据
                     row['Mean'] = mean_val
                     row['SD'] = sd_val
                     row['Letter'] = let
+                    
+                    # 组合数据 (仅 Mean + Letter)
+                    row['Mean_Letter'] = f"{mean_val:.2f} {let}"
+                    
                     sliced_comparison_rows.append(row)
                     
         except Exception as e:
             pass
 
-    # --- D. 构建三线表 (Multi-Index Pivot) ---
+    # --- D. 生成表格 (Pivot) ---
     
-    # 1. ANOVA 表 (Index=Source, Columns=Trait, Value=F_Sig)
+    # 1. ANOVA 表
     if anova_rows:
         anova_df = pd.DataFrame(anova_rows)
         results['anova_table'] = anova_df.pivot_table(
@@ -211,37 +223,45 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     else:
         results['anova_table'] = pd.DataFrame()
 
-    # 2. 主效应表 (Index=Factor+Level, Columns=Trait -> [Mean, SD, Letter])
+    # 2. 主效应表 (Mean_Letter(Upper), SD)
     if main_effects_rows:
         me_df = pd.DataFrame(main_effects_rows)
-        # 核心：多值 Pivot
         me_pivot = me_df.pivot_table(
             index=['Factor', 'Level'], 
             columns='Trait', 
-            values=['Mean', 'SD', 'Letter'], 
+            values=['Mean_Letter', 'SD'], 
             aggfunc='first'
         )
-        # 调整列顺序：让指标在最上层，Mean/SD/Letter 在下层
-        # swaplevel 将 (Mean, Yield) 变成 (Yield, Mean)
-        # sort_index 让同一个指标的 Mean/SD/Letter 挨在一起
+        # 调整列顺序
         results['main_effects_table'] = me_pivot.swaplevel(0, 1, axis=1).sort_index(axis=1)
     else:
         results['main_effects_table'] = pd.DataFrame()
 
-    # 3. 切片比较表 (Index=Group+TestFactor, Columns=Trait -> [Mean, SD, Letter])
+    # 3. 切片比较 (两种格式)
     if sliced_comparison_rows:
         sc_df = pd.DataFrame(sliced_comparison_rows)
         pivot_index = group_factors + [test_factor]
         
-        sc_pivot = sc_df.pivot_table(
+        # 格式一：Mean, Letter, SD 三个分开 (方便画图)
+        sc_pivot_sep = sc_df.pivot_table(
             index=pivot_index, 
             columns='Trait', 
-            values=['Mean', 'SD', 'Letter'], 
+            values=['Mean', 'Letter', 'SD'], 
             aggfunc='first'
         )
-        results['sliced_table'] = sc_pivot.swaplevel(0, 1, axis=1).sort_index(axis=1)
+        results['sliced_table_sep'] = sc_pivot_sep.swaplevel(0, 1, axis=1).sort_index(axis=1)
+        
+        # 格式二：仅 Mean + Letter 组合 (方便表格)
+        sc_pivot_comb = sc_df.pivot_table(
+            index=pivot_index, 
+            columns='Trait', 
+            values=['Mean_Letter'], 
+            aggfunc='first'
+        )
+        results['sliced_table_comb'] = sc_pivot_comb.swaplevel(0, 1, axis=1).sort_index(axis=1)
     else:
-        results['sliced_table'] = pd.DataFrame()
+        results['sliced_table_sep'] = pd.DataFrame()
+        results['sliced_table_comb'] = pd.DataFrame()
         
     # 4. 相关性
     if len(targets) > 1:
@@ -267,9 +287,15 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="论文三线表生成器 (分离版)", layout="wide", page_icon="📝")
-st.title("📝 论文数据生成器 (Separated Mean/SD)")
-st.info("✅ 已满足：组内比较、主效应均已将 **Mean(均值)**、**SD(标准差)**、**Letter(字母)** 拆分为独立列，且按指标分组排列。")
+st.set_page_config(page_title="论文数据助手 (定制版)", layout="wide", page_icon="📊")
+st.title("📊 论文数据生成器 (Customized Formats)")
+st.info("""
+✅ **组内比较**：生成两种表格
+1. **分列数据**：Mean、Letter、SD 独立列 (方便作图)
+2. **组合数据**：仅包含 Mean + Letter (方便制表)
+
+✅ **主效应**：Mean + 大写Letter 组合
+""")
 
 with st.sidebar:
     st.header("1. 数据上传")
@@ -299,67 +325,77 @@ with st.sidebar:
             
             targets = st.multiselect("指标 (Y)", all_cols)
             
-            run_btn = st.button("生成三线表数据", type="primary")
+            run_btn = st.button("生成分析结果", type="primary")
             
         except Exception as e:
             st.error(f"读取错误: {e}")
 
 if uploaded_file and factors and targets and test_factor and run_btn:
     st.divider()
-    with st.spinner("正在构建多级表头数据..."):
+    with st.spinner("正在生成多格式数据..."):
         try:
             res = run_comprehensive_analysis(df, factors, targets, test_factor)
             
-            # 使用 Tabs 展示
-            tab1, tab2, tab3, tab4 = st.tabs(["📝 组内比较 (切片)", "📝 主效应比较", "📝 方差分析 (F值)", "🔗 相关性"])
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "📈 组内 (分列-作图用)", 
+                "📑 组内 (组合-制表用)", 
+                "🏆 主效应 (大写)", 
+                "🧮 ANOVA", 
+                "🔗 相关性"
+            ])
             
             with tab1:
-                st.subheader(f"Table 1. 组内差异 (按 {test_factor})")
-                st.caption("列结构：指标 -> [Letter, Mean, SD]")
-                if not res['sliced_table'].empty:
-                    st.dataframe(res['sliced_table'], use_container_width=True)
+                st.subheader(f"1. 组内比较 - 分列数据 (按 {test_factor})")
+                st.caption("结构：指标 -> [Mean, SD, Letter] | 适合导入 Origin/GraphPad")
+                if not res['sliced_table_sep'].empty:
+                    st.dataframe(res['sliced_table_sep'], use_container_width=True)
                 else:
                     st.warning("无数据")
 
             with tab2:
-                st.subheader("Table 2. 主效应差异")
+                st.subheader(f"2. 组内比较 - 组合标签 (按 {test_factor})")
+                st.caption("结构：指标 -> [Mean_Letter] | 适合直接粘贴到 Word 表格")
+                if not res['sliced_table_comb'].empty:
+                    st.dataframe(res['sliced_table_comb'], use_container_width=True)
+                else:
+                    st.warning("无数据")
+
+            with tab3:
+                st.subheader("3. 主效应比较 (Uppercase)")
+                st.caption("结构：指标 -> [Mean_Letter]")
                 if not res['main_effects_table'].empty:
                     st.dataframe(res['main_effects_table'], use_container_width=True)
                 else:
                     st.warning("无数据")
 
-            with tab3:
-                st.subheader("Table 3. 方差分析结果")
-                st.caption("F-value + Significance Stars")
+            with tab4:
+                st.subheader("4. 方差分析 (F-value)")
                 if not res['anova_table'].empty:
                     st.dataframe(res['anova_table'], use_container_width=True)
                 else:
                     st.warning("无数据")
 
-            with tab4:
-                st.subheader("Figure 1. 相关性矩阵")
+            with tab5:
+                st.subheader("5. 相关性矩阵")
                 st.dataframe(res['correlation'], use_container_width=True)
             
-            # 导出逻辑
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer) as writer:
-                # 写入所有生成的表格
-                if not res['sliced_table'].empty: 
-                    res['sliced_table'].to_excel(writer, sheet_name='Table_组内比较')
-                
+                if not res['sliced_table_sep'].empty: 
+                    res['sliced_table_sep'].to_excel(writer, sheet_name='组内_分列数据')
+                if not res['sliced_table_comb'].empty: 
+                    res['sliced_table_comb'].to_excel(writer, sheet_name='组内_组合标签')
                 if not res['main_effects_table'].empty: 
-                    res['main_effects_table'].to_excel(writer, sheet_name='Table_主效应')
-                
+                    res['main_effects_table'].to_excel(writer, sheet_name='主效应_大写')
                 if not res['anova_table'].empty: 
-                    res['anova_table'].to_excel(writer, sheet_name='Table_方差分析')
-                
+                    res['anova_table'].to_excel(writer, sheet_name='ANOVA')
                 if not res['correlation'].empty: 
                     res['correlation'].to_excel(writer, sheet_name='相关分析')
                 
             st.download_button(
-                "📥 下载三线表数据 (Excel)",
+                "📥 下载完整数据包 (Excel)",
                 data=buffer.getvalue(),
-                file_name="Three_Line_Tables_Separated.xlsx",
+                file_name="Analysis_MultiFormat.xlsx",
                 mime="application/vnd.ms-excel"
             )
             
