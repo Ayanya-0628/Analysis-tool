@@ -19,19 +19,15 @@ def get_stars(p_value):
     return 'ns'
 
 def pairwise_lsd_test_with_mse(stats_df, mse, df_resid, alpha=0.05):
-    """
-    使用外部传入的 MSE (来自全模型) 进行 Fisher's LSD 检验
-    """
+    """Fisher's LSD 检验"""
     results = []
     group_names = stats_df.index.tolist()
     
-    # 两两比较
     for g1, g2 in itertools.combinations(group_names, 2):
-        m1, n1 = stats_df.loc[g1]
-        m2, n2 = stats_df.loc[g2]
+        m1, n1 = stats_df.loc[g1, 'mean'], stats_df.loc[g1, 'count']
+        m2, n2 = stats_df.loc[g2, 'mean'], stats_df.loc[g2, 'count']
         
         diff = m1 - m2
-        # LSD 标准误
         se = np.sqrt(mse * (1/n1 + 1/n2))
         
         if se <= 1e-10: 
@@ -46,32 +42,23 @@ def pairwise_lsd_test_with_mse(stats_df, mse, df_resid, alpha=0.05):
     return results
 
 def solve_clique_cld(means, pairwise_data):
-    """
-    最大团算法生成字母标记
-    """
+    """最大团算法生成字母标记"""
     groups = [str(g).strip() for g in means.index.tolist()]
     n = len(groups)
     g_to_i = {g: i for i, g in enumerate(groups)}
-    
-    # 初始化：默认全连接
     adj = np.ones((n, n), dtype=bool) 
     
-    # 根据显著性断开连接
     if pairwise_data:
         for row in pairwise_data:
-            g1 = str(row[0]).strip()
-            g2 = str(row[1]).strip()
-            reject = row[4]
+            g1, g2, reject = str(row[0]).strip(), str(row[1]).strip(), row[4]
             if reject: 
                 if g1 in g_to_i and g2 in g_to_i:
                     i, j = g_to_i[g1], g_to_i[g2]
                     adj[i, j] = False
                     adj[j, i] = False
 
-    # 移除自环
-    np.fill_diagonal(adj, False)
+    np.fill_diagonal(adj, False) # 移除自环
 
-    # Bron-Kerbosch 最大团算法
     cliques = []
     def bron_kerbosch(R, P, X):
         if len(P) == 0 and len(X) == 0:
@@ -87,7 +74,6 @@ def solve_clique_cld(means, pairwise_data):
 
     bron_kerbosch(set(), set(range(n)), set())
     
-    # 分配字母
     clique_means = []
     for clq in cliques:
         avg_mean = np.mean([means.iloc[i] for i in clq])
@@ -107,24 +93,22 @@ def solve_clique_cld(means, pairwise_data):
     original_index = means.index.tolist()
     for i in range(n):
         l_str = "".join(sorted(group_letters[i]))
-        key_str = str(original_index[i]).strip()
-        final_res[key_str] = l_str
+        final_res[str(original_index[i]).strip()] = l_str
         
     return final_res
 
 # ==========================================
-# 2. 核心流程：全能分析 (含标准差计算)
+# 2. 核心流程：全能分析 + 三线表格式化
 # ==========================================
 
 def run_comprehensive_analysis(df, factors, targets, test_factor):
     results = {}
     
-    # 0. 数据清洗
+    # 数据清洗
     work_df = df.copy()
     for f in factors:
         work_df[f] = work_df[f].astype(str).str.strip()
         
-    # 分组因子
     group_factors = [f for f in factors if f != test_factor]
     
     # 容器
@@ -134,30 +118,30 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     
     for target in targets:
         try:
-            # --- A. 全模型 ANOVA & 全局误差 ---
+            # --- A. 全模型 ANOVA ---
             formula = f"{target} ~ {' * '.join(factors)}"
             model = ols(formula, data=work_df).fit()
             
-            # 记录 ANOVA
             aov_table = sm.stats.anova_lm(model, typ=2)
-            for source, row in aov_table.iterrows():
-                if source == 'Residual': continue
-                anova_rows.append({
-                    'Trait': target,
-                    'Source': source,
-                    'Df': int(row['df']),
-                    'F-value': row['F'],
-                    'P-value': row['PR(>F)'],
-                    'Signif': get_stars(row['PR(>F)'])
-                })
-            
-            # 获取全局 Pooled MSE
             global_mse = model.mse_resid
             global_df_resid = model.df_resid
             
-            # --- B. 主效应比较 (Main Effects) ---
+            # 记录 ANOVA (格式化为 F值+星号)
+            for source, row in aov_table.iterrows():
+                if source == 'Residual': continue
+                f_str = f"{row['F']:.2f}{get_stars(row['PR(>F)'])}"
+                anova_rows.append({
+                    'Trait': target,
+                    'Source': source,
+                    'F_Sig': f_str, # 专门用于三线表
+                    'Df': int(row['df']),
+                    'P-value': row['PR(>F)']
+                })
+            
+            # --- B. 主效应 (含 SD) ---
             for factor in factors:
-                stats = work_df.groupby(factor)[target].agg(['mean', 'count'])
+                # 聚合 Mean, SD, Count
+                stats = work_df.groupby(factor)[target].agg(['mean', 'std', 'count']).fillna(0)
                 
                 if len(stats) < 2:
                     letters = {str(k).strip(): 'a' for k in stats.index}
@@ -167,19 +151,21 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                 
                 for lvl in stats.index:
                     mean_val = stats.loc[lvl, 'mean']
+                    sd_val = stats.loc[lvl, 'std']
                     lvl_str = str(lvl).strip()
                     let = letters.get(lvl_str, 'a')
+                    
+                    # 格式化：Mean ± SD Letter
+                    fmt_str = f"{mean_val:.2f} ± {sd_val:.2f} {let}"
                     
                     main_effects_rows.append({
                         'Factor': factor,
                         'Level': lvl_str,
                         'Trait': target,
-                        'Mean': mean_val,
-                        'Letter': let,
-                        'Label': f"{mean_val:.2f} {let}"
+                        'Formatted': fmt_str
                     })
 
-            # --- C. 组内切片比较 (Sliced Comparison) ---
+            # --- C. 切片比较 (含 SD) ---
             if not group_factors:
                 iter_groups = [( "All", work_df )] 
             else:
@@ -193,7 +179,7 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     for k, val in zip(group_factors, group_keys):
                         current_info[k] = str(val)
                 
-                stats = sub_df.groupby(test_factor)[target].agg(['mean', 'count'])
+                stats = sub_df.groupby(test_factor)[target].agg(['mean', 'std', 'count']).fillna(0)
                 
                 if len(stats) < 2:
                     letters = {str(k).strip(): 'a' for k in stats.index}
@@ -203,51 +189,50 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                 
                 for lvl in stats.index:
                     mean_val = stats.loc[lvl, 'mean']
+                    sd_val = stats.loc[lvl, 'std']
                     lvl_str = str(lvl).strip()
                     let = letters.get(lvl_str, 'a')
                     
                     row = current_info.copy()
                     row[test_factor] = lvl_str
-                    row['Mean'] = mean_val
-                    row['Letter'] = let
-                    row['Label'] = f"{mean_val:.2f} {let}"
+                    # 格式化
+                    row['Formatted'] = f"{mean_val:.2f} ± {sd_val:.2f} {let}"
                     sliced_comparison_rows.append(row)
                     
         except Exception as e:
             pass
 
-    # --- D. 整理输出 ---
+    # --- D. 生成三线表 Pivot ---
     
-    # 1. ANOVA
-    results['anova'] = pd.DataFrame(anova_rows)
-    
-    # 2. 主效应
+    # 1. ANOVA 表 (行=Source, 列=Trait, 值=F+星号)
+    if anova_rows:
+        anova_df = pd.DataFrame(anova_rows)
+        results['anova_table'] = anova_df.pivot_table(
+            index='Source', columns='Trait', values='F_Sig', aggfunc='first'
+        )
+    else:
+        results['anova_table'] = pd.DataFrame()
+
+    # 2. 主效应表 (行=Factor+Level, 列=Trait, 值=Mean±SD Letter)
     if main_effects_rows:
         me_df = pd.DataFrame(main_effects_rows)
-        results['main_effects'] = me_df
-        results['main_effects_pivot'] = me_df.pivot_table(
-            index=['Factor', 'Level'], columns='Trait', values='Label', aggfunc='first'
-        ).reset_index()
+        results['main_effects_table'] = me_df.pivot_table(
+            index=['Factor', 'Level'], columns='Trait', values='Formatted', aggfunc='first'
+        )
     else:
-        results['main_effects'] = pd.DataFrame()
-        results['main_effects_pivot'] = pd.DataFrame()
+        results['main_effects_table'] = pd.DataFrame()
 
-    # 3. 切片比较
+    # 3. 切片比较表 (行=Background+TestFactor, 列=Trait, 值=Mean±SD Letter)
     if sliced_comparison_rows:
-        sliced_df = pd.DataFrame(sliced_comparison_rows)
-        cols = group_factors + [test_factor, 'Trait', 'Mean', 'Letter', 'Label']
-        final_cols = [c for c in cols if c in sliced_df.columns]
-        results['sliced_comparison'] = sliced_df[final_cols]
-        
+        sc_df = pd.DataFrame(sliced_comparison_rows)
         pivot_index = group_factors + [test_factor]
-        results['sliced_pivot'] = sliced_df.pivot_table(
-            index=pivot_index, columns='Trait', values='Label', aggfunc='first'
-        ).reset_index()
+        results['sliced_table'] = sc_df.pivot_table(
+            index=pivot_index, columns='Trait', values='Formatted', aggfunc='first'
+        )
     else:
-        results['sliced_comparison'] = pd.DataFrame()
-        results['sliced_pivot'] = pd.DataFrame()
+        results['sliced_table'] = pd.DataFrame()
         
-    # 4. 相关性
+    # 4. 相关性 (保持数值型方便作图，也提供星号版)
     if len(targets) > 1:
         corr_matrix = pd.DataFrame(index=targets, columns=targets)
         for t1 in targets:
@@ -265,36 +250,15 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     else:
         results['correlation'] = pd.DataFrame()
 
-    # --- E. 描述性统计 (标准差) ---
-    # 计算 Mean, Std, Count
-    # 对所有选定的因子组合进行聚合
-    try:
-        desc_df = work_df.groupby(factors)[targets].agg(['mean', 'std', 'count']).reset_index()
-        # 扁平化多级列索引 (例如: ('Yield', 'mean') -> 'Yield_Mean')
-        new_cols = []
-        for col in desc_df.columns.values:
-            if isinstance(col, tuple):
-                if col[1] == '':
-                    new_cols.append(col[0]) # 因子列
-                else:
-                    # 将指标和统计量合并，如 Yield_mean
-                    new_cols.append(f"{col[0]}_{col[1]}")
-            else:
-                new_cols.append(col)
-        desc_df.columns = new_cols
-        results['descriptive'] = desc_df
-    except Exception as e:
-        results['descriptive'] = pd.DataFrame()
-
     return results
 
 # ==========================================
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="农业统计平台 (SD版)", layout="wide", page_icon="🌾")
-st.title("🌾 农业数据分析平台")
-st.info("✅ 功能更新：新增 **标准差 (SD)** 计算，单独展示在“描述性统计”页签。")
+st.set_page_config(page_title="论文三线表生成器", layout="wide", page_icon="📝")
+st.title("📝 论文数据生成器 (Three-Line Table Ready)")
+st.info("✅ 特性：直接输出 `Mean ± SD Letter` 和 `F-value + Stars` 格式，可直接复制到 Word/Excel 制作三线表。")
 
 with st.sidebar:
     st.header("1. 数据上传")
@@ -316,94 +280,76 @@ with st.sidebar:
             all_cols = df.columns.tolist()
             
             st.markdown("---")
-            st.write("👉 **步骤 1: 选择所有参与因子的列**")
             factors = st.multiselect("因子 (X)", all_cols)
             
             if factors:
-                st.markdown("👉 **步骤 2: 选择用于组内比较的因子**")
                 default_idx = len(factors) - 1
-                test_factor = st.selectbox("比较因子 (Test Factor)", factors, index=default_idx)
+                test_factor = st.selectbox("比较因子 (用于组内比较)", factors, index=default_idx)
             
-            st.markdown("👉 **步骤 3: 选择指标**")
             targets = st.multiselect("指标 (Y)", all_cols)
             
-            run_btn = st.button("开始分析", type="primary")
+            run_btn = st.button("生成三线表数据", type="primary")
             
         except Exception as e:
             st.error(f"读取错误: {e}")
 
 if uploaded_file and factors and targets and test_factor and run_btn:
     st.divider()
-    with st.spinner("正在计算 (含标准差)..."):
+    with st.spinner("正在进行统计并格式化..."):
         try:
             res = run_comprehensive_analysis(df, factors, targets, test_factor)
             
-            # Tabs
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 主效应", "🔍 组内切片", "📈 描述性统计 (SD)", "📑 方差分析", "🔗 相关性"])
+            # 使用 Tabs 展示不同类型的表
+            tab1, tab2, tab3, tab4 = st.tabs(["📝 组内比较 (切片)", "📝 主效应比较", "📝 方差分析 (F值)", "🔗 相关性"])
             
             with tab1:
-                st.subheader("1. 主效应比较")
-                if not res['main_effects_pivot'].empty:
-                    st.dataframe(res['main_effects_pivot'], use_container_width=True)
-                    with st.expander("查看详细数据"):
-                        st.dataframe(res['main_effects'], use_container_width=True)
+                st.subheader(f"Table 1. 组内差异 (按 {test_factor})")
+                st.caption("格式：Mean ± SD Letter")
+                if not res['sliced_table'].empty:
+                    st.dataframe(res['sliced_table'], use_container_width=True)
                 else:
                     st.warning("无数据")
 
             with tab2:
-                st.subheader(f"2. 组内切片比较 (按 {test_factor})")
-                if not res['sliced_pivot'].empty:
-                    st.dataframe(res['sliced_pivot'], use_container_width=True)
-                    with st.expander("查看详细数据"):
-                        st.dataframe(res['sliced_comparison'], use_container_width=True)
+                st.subheader("Table 2. 主效应差异")
+                st.caption("格式：Mean ± SD Letter")
+                if not res['main_effects_table'].empty:
+                    st.dataframe(res['main_effects_table'], use_container_width=True)
                 else:
                     st.warning("无数据")
 
             with tab3:
-                st.subheader("3. 描述性统计 (含标准差 SD)")
-                st.caption("展示各因子组合下的 均值(mean)、标准差(std) 和 样本量(count)。")
-                if not res['descriptive'].empty:
-                    st.dataframe(res['descriptive'], use_container_width=True)
+                st.subheader("Table 3. 方差分析结果")
+                st.caption("格式：F-value (Significance)")
+                if not res['anova_table'].empty:
+                    st.dataframe(res['anova_table'], use_container_width=True)
                 else:
-                    st.warning("无法计算描述性统计")
+                    st.warning("无数据")
 
             with tab4:
-                st.subheader("4. 全模型方差分析表")
-                st.dataframe(res['anova'], use_container_width=True)
-                
-            with tab5:
-                st.subheader("5. 相关性分析")
+                st.subheader("Figure 1. 相关性矩阵")
                 st.dataframe(res['correlation'], use_container_width=True)
             
-            # 导出
+            # 导出逻辑
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer) as writer:
-                # 描述性统计 (SD)
-                if not res['descriptive'].empty:
-                    res['descriptive'].to_excel(writer, sheet_name='描述性统计(SD)', index=False)
-
-                # 主效应
-                if not res['main_effects_pivot'].empty: 
-                    res['main_effects_pivot'].to_excel(writer, sheet_name='主效应_宽表', index=False)
-                if not res['main_effects'].empty: 
-                    res['main_effects'].to_excel(writer, sheet_name='主效应_明细', index=False)
+                # 写入所有生成的表格
+                if not res['sliced_table'].empty: 
+                    res['sliced_table'].to_excel(writer, sheet_name='Table_组内比较')
                 
-                # 切片比较
-                if not res['sliced_pivot'].empty: 
-                    res['sliced_pivot'].to_excel(writer, sheet_name='组内切片_宽表', index=False)
-                if not res['sliced_comparison'].empty: 
-                    res['sliced_comparison'].to_excel(writer, sheet_name='组内切片_明细', index=False)
+                if not res['main_effects_table'].empty: 
+                    res['main_effects_table'].to_excel(writer, sheet_name='Table_主效应')
                 
-                # 其他
-                if not res['anova'].empty: 
-                    res['anova'].to_excel(writer, sheet_name='ANOVA', index=False)
+                if not res['anova_table'].empty: 
+                    res['anova_table'].to_excel(writer, sheet_name='Table_方差分析')
+                
                 if not res['correlation'].empty: 
                     res['correlation'].to_excel(writer, sheet_name='相关分析')
                 
             st.download_button(
-                "📥 下载分析报告 (含标准差)",
+                "📥 下载所有三线表数据 (Excel)",
                 data=buffer.getvalue(),
-                file_name="Analysis_Report_With_SD.xlsx",
+                file_name="Publication_Ready_Tables.xlsx",
                 mime="application/vnd.ms-excel"
             )
             
