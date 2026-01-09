@@ -316,7 +316,6 @@ with st.expander("ℹ️ 使用说明 & 数据格式示例 (点击展开)"):
     demo_data = pd.DataFrame({
         '品种': ['V1', 'V1', 'V2', 'V2'],
         '处理': ['CK', 'N1', 'CK', 'N1'],
-        '重复': ['R1', 'R1', 'R1', 'R1'],
         '产量(kg)': [500.2, 520.5, 480.1, 495.3],
         '株高(cm)': [100.5, 105.2, 98.4, 101.2]
     })
@@ -443,5 +442,6 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             st.error(f"分析失败: {e}")
             import traceback
             st.text(traceback.format_exc())
+
 
 
