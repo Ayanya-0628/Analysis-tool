@@ -301,7 +301,7 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="论文数据助手", layout="wide", page_icon="📊")
+st.set_page_config(page_title="数据分析", layout="wide", page_icon="📊")
 st.title("📊 简单的数据分析")
 # ==================== 新增部分开始 ====================
 with st.expander("ℹ️ 使用说明 & 数据格式示例 (点击展开)"):
@@ -443,6 +443,7 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             st.error(f"分析失败: {e}")
             import traceback
             st.text(traceback.format_exc())
+
 
 
 
