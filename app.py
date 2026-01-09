@@ -81,7 +81,6 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     
     clique_means.sort(key=lambda x: x[0], reverse=True)
     
-    # 区分大小写
     if use_uppercase:
         letters_list = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     else:
@@ -103,7 +102,7 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     return final_res
 
 # ==========================================
-# 2. 核心流程：定制化列结构
+# 2. 核心流程：定制化列结构 (Updated)
 # ==========================================
 
 def run_comprehensive_analysis(df, factors, targets, test_factor):
@@ -139,7 +138,7 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     'F_Sig': f_str
                 })
             
-            # --- B. 主效应 (大写字母) ---
+            # --- B. 主效应 (大写字母, 无 SD) ---
             for factor in factors:
                 stats = work_df.groupby(factor)[target].agg(['mean', 'std', 'count']).fillna(0)
                 
@@ -147,7 +146,6 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     letters = {str(k).strip(): 'A' for k in stats.index}
                 else:
                     pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
-                    # use_uppercase=True
                     letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=True)
                 
                 for lvl in stats.index:
@@ -164,10 +162,11 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                         'Level': lvl_str,
                         'Trait': target,
                         'Mean_Letter': mean_let, 
-                        'SD': sd_val,
+                        # SD 这里计算了但不放入 Pivot
+                        'SD': sd_val 
                     })
 
-            # --- C. 切片比较 (小写字母) ---
+            # --- C. 切片比较 (Mean, Letter, SD) ---
             if not group_factors:
                 iter_groups = [( "All", work_df )] 
             else:
@@ -187,7 +186,6 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     letters = {str(k).strip(): 'a' for k in stats.index}
                 else:
                     pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
-                    # use_uppercase=False
                     letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=False)
                 
                 for lvl in stats.index:
@@ -204,7 +202,7 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
                     row['SD'] = sd_val
                     row['Letter'] = let
                     
-                    # 组合数据 (仅 Mean + Letter)
+                    # 组合数据
                     row['Mean_Letter'] = f"{mean_val:.2f} {let}"
                     
                     sliced_comparison_rows.append(row)
@@ -223,13 +221,14 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
     else:
         results['anova_table'] = pd.DataFrame()
 
-    # 2. 主效应表 (Mean_Letter(Upper), SD)
+    # 2. 主效应表 (Mean_Letter ONLY)
     if main_effects_rows:
         me_df = pd.DataFrame(main_effects_rows)
+        # 仅 Pivot Mean_Letter，移除 SD
         me_pivot = me_df.pivot_table(
             index=['Factor', 'Level'], 
             columns='Trait', 
-            values=['Mean_Letter', 'SD'], 
+            values=['Mean_Letter'], 
             aggfunc='first'
         )
         # 调整列顺序
@@ -242,16 +241,31 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
         sc_df = pd.DataFrame(sliced_comparison_rows)
         pivot_index = group_factors + [test_factor]
         
-        # 格式一：Mean, Letter, SD 三个分开 (方便画图)
+        # 格式一：Mean, Letter, SD 三个分开 (指定顺序)
         sc_pivot_sep = sc_df.pivot_table(
             index=pivot_index, 
             columns='Trait', 
             values=['Mean', 'Letter', 'SD'], 
             aggfunc='first'
         )
-        results['sliced_table_sep'] = sc_pivot_sep.swaplevel(0, 1, axis=1).sort_index(axis=1)
+        # 交换层级: (Trait, Type)
+        sc_pivot_sep = sc_pivot_sep.swaplevel(0, 1, axis=1)
+        # 先按指标排序
+        sc_pivot_sep = sc_pivot_sep.sort_index(axis=1, level=0)
         
-        # 格式二：仅 Mean + Letter 组合 (方便表格)
+        # 【关键修改】强制重排 Level 1 的顺序: Mean -> Letter -> SD
+        # 获取所有排好序的指标
+        sorted_traits = sc_pivot_sep.columns.get_level_values(0).unique()
+        # 构建新的列索引顺序
+        new_columns = []
+        for t in sorted_traits:
+            for val in ['Mean', 'Letter', 'SD']:
+                new_columns.append((t, val))
+        
+        # 应用重排
+        results['sliced_table_sep'] = sc_pivot_sep.reindex(columns=new_columns)
+        
+        # 格式二：仅 Mean + Letter 组合
         sc_pivot_comb = sc_df.pivot_table(
             index=pivot_index, 
             columns='Trait', 
@@ -287,14 +301,14 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="论文数据助手 (定制版)", layout="wide", page_icon="📊")
-st.title("📊 论文数据生成器 (Customized Formats)")
+st.set_page_config(page_title="论文数据助手 (作图优化版)", layout="wide", page_icon="📊")
+st.title("📊 论文数据生成器 (Plot-Ready)")
 st.info("""
-✅ **组内比较**：生成两种表格
-1. **分列数据**：Mean、Letter、SD 独立列 (方便作图)
-2. **组合数据**：仅包含 Mean + Letter (方便制表)
-
-✅ **主效应**：Mean + 大写Letter 组合
+✅ **组内比较**：
+   - **格式 A**：Mean, Letter, SD 严格按此顺序分列 (方便作图)
+   - **格式 B**：Mean+Letter 组合 (方便制表)
+✅ **主效应**：
+   - 仅保留 **Mean + 大写Letter** (移除 SD 列)
 """)
 
 with st.sidebar:
@@ -337,8 +351,8 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             res = run_comprehensive_analysis(df, factors, targets, test_factor)
             
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📈 组内 (分列-作图用)", 
-                "📑 组内 (组合-制表用)", 
+                "📈 组内 (分列-作图)", 
+                "📑 组内 (组合-制表)", 
                 "🏆 主效应 (大写)", 
                 "🧮 ANOVA", 
                 "🔗 相关性"
@@ -346,7 +360,7 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             
             with tab1:
                 st.subheader(f"1. 组内比较 - 分列数据 (按 {test_factor})")
-                st.caption("结构：指标 -> [Mean, SD, Letter] | 适合导入 Origin/GraphPad")
+                st.caption("顺序：Mean -> Letter -> SD | 适合导入 Origin/GraphPad")
                 if not res['sliced_table_sep'].empty:
                     st.dataframe(res['sliced_table_sep'], use_container_width=True)
                 else:
@@ -354,7 +368,7 @@ if uploaded_file and factors and targets and test_factor and run_btn:
 
             with tab2:
                 st.subheader(f"2. 组内比较 - 组合标签 (按 {test_factor})")
-                st.caption("结构：指标 -> [Mean_Letter] | 适合直接粘贴到 Word 表格")
+                st.caption("结构：Mean_Letter | 适合直接粘贴到 Word 表格")
                 if not res['sliced_table_comb'].empty:
                     st.dataframe(res['sliced_table_comb'], use_container_width=True)
                 else:
@@ -362,7 +376,7 @@ if uploaded_file and factors and targets and test_factor and run_btn:
 
             with tab3:
                 st.subheader("3. 主效应比较 (Uppercase)")
-                st.caption("结构：指标 -> [Mean_Letter]")
+                st.caption("结构：Mean_Letter Only (无 SD)")
                 if not res['main_effects_table'].empty:
                     st.dataframe(res['main_effects_table'], use_container_width=True)
                 else:
@@ -395,7 +409,7 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             st.download_button(
                 "📥 下载完整数据包 (Excel)",
                 data=buffer.getvalue(),
-                file_name="Analysis_MultiFormat.xlsx",
+                file_name="Analysis_Formatted.xlsx",
                 mime="application/vnd.ms-excel"
             )
             
