@@ -301,8 +301,8 @@ def run_comprehensive_analysis(df, factors, targets, test_factor):
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="论文数据助手 (作图优化版)", layout="wide", page_icon="📊")
-st.title("📊 论文数据生成器 (Plot-Ready)")
+st.set_page_config(page_title="论文数据助手", layout="wide", page_icon="📊")
+st.title("📊 简单的数据分析")
 st.info("""
 ✅ **组内比较**：
    - **格式 A**：Mean, Letter, SD 严格按此顺序分列 (方便作图)
@@ -417,3 +417,4 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             st.error(f"分析失败: {e}")
             import traceback
             st.text(traceback.format_exc())
+
