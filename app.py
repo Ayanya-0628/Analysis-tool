@@ -86,12 +86,13 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     return final_res
 
 # ==========================================
-# 2. 并行化核心逻辑
+# 2. 并行化核心逻辑 (已修改)
 # ==========================================
 
-def process_single_target(target, df_data, factors, test_factor):
+def process_single_target(target, df_data, factors, test_factor, mse_strategy):
     """
-    处理单个指标的计算函数，供多进程调用。
+    处理单个指标的计算函数
+    mse_strategy: 'full' (多因素MSE) 或 'oneway' (单因素MSE)
     """
     res = {
         'anova_rows': [],
@@ -108,14 +109,15 @@ def process_single_target(target, df_data, factors, test_factor):
 
         group_factors = [f for f in factors if f != test_factor]
 
-        # --- A. ANOVA ---
+        # --- A. ANOVA (始终基于全模型输出 F 值，这是标准的) ---
         formula = f"Q('{target}') ~ {' * '.join([f'Q(\"{f}\")' for f in factors])}" 
         model = ols(formula, data=current_df).fit()
         
-        aov_table = sm.stats.anova_lm(model, typ=2)
+        # 获取全模型的 MSE (这是策略 A 用的)
         global_mse = model.mse_resid
         global_df_resid = model.df_resid
         
+        aov_table = sm.stats.anova_lm(model, typ=2)
         aov_table.index = [idx.replace('Q("', '').replace('")', '') for idx in aov_table.index]
 
         for source, row in aov_table.iterrows():
@@ -127,13 +129,36 @@ def process_single_target(target, df_data, factors, test_factor):
                 'F_Sig': f_str
             })
         
-        # --- B. 主效应 ---
+        # --- B. 主效应 (此处应用策略选择) ---
         for factor in factors:
             stats = current_df.groupby(factor)[target].agg(['mean', 'std', 'count']).fillna(0)
+            
+            # --- 关键修改开始 ---
+            if mse_strategy == 'oneway':
+                # 【策略 B：单因素逻辑】
+                # 重新拟合一个只包含当前因子的模型，获取其MSE。
+                # 这个MSE会包含其他未解释因子的变异，数值通常较大。
+                try:
+                    sub_formula = f"Q('{target}') ~ C(Q('{factor}'))"
+                    sub_model = ols(sub_formula, data=current_df).fit()
+                    current_mse = sub_model.mse_resid
+                    current_df_resid = sub_model.df_resid
+                except:
+                    # 如果拟合失败（极少见），回退到全局MSE
+                    current_mse = global_mse
+                    current_df_resid = global_df_resid
+            else:
+                # 【策略 A：全模型逻辑 (默认)】
+                # 使用剥离了其他因子干扰后的纯净误差。
+                current_mse = global_mse
+                current_df_resid = global_df_resid
+            # --- 关键修改结束 ---
+
             if len(stats) < 2:
                 letters = {str(k).strip(): 'A' for k in stats.index}
             else:
-                pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
+                # 使用选定的 MSE 进行 LSD 检验
+                pairwise_res = pairwise_lsd_test_with_mse(stats, current_mse, current_df_resid, alpha=0.05)
                 letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=True)
             
             for lvl in stats.index:
@@ -147,7 +172,7 @@ def process_single_target(target, df_data, factors, test_factor):
                     'SD': stats.loc[lvl, 'std']
                 })
 
-        # --- C. 切片比较 ---
+        # --- C. 切片比较 (始终使用全模型 MSE，因为这是为了看特定条件下的差异) ---
         if not group_factors:
             iter_groups = [( "All", current_df )] 
         else:
@@ -166,6 +191,7 @@ def process_single_target(target, df_data, factors, test_factor):
             if len(stats) < 2:
                 letters = {str(k).strip(): 'a' for k in stats.index}
             else:
+                # 组内切片比较通常沿用全模型 MSE
                 pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
                 letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=False)
             
@@ -188,7 +214,7 @@ def process_single_target(target, df_data, factors, test_factor):
     
     return res
 
-def run_parallel_analysis(df, factors, targets, test_factor):
+def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     results = {}
     errors = []
     
@@ -218,8 +244,9 @@ def run_parallel_analysis(df, factors, targets, test_factor):
     start_time = time.time()
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # 传入 mse_strategy 参数
         future_to_target = {
-            executor.submit(process_single_target, t, work_df[[t] + factors], factors, test_factor): t 
+            executor.submit(process_single_target, t, work_df[[t] + factors], factors, test_factor, mse_strategy): t 
             for t in valid_targets
         }
         
@@ -251,6 +278,7 @@ def run_parallel_analysis(df, factors, targets, test_factor):
     status_text.empty()
     progress_bar.empty()
 
+    # 聚合结果
     if all_anova:
         results['anova_table'] = pd.DataFrame(all_anova).pivot_table(
             index='Source', columns='Trait', values='F_Sig', aggfunc='first'
@@ -320,51 +348,30 @@ def run_parallel_analysis(df, factors, targets, test_factor):
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="数据分析 (并行加速版)", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="数据分析 (并行+模型选择)", layout="wide", page_icon="⚡")
 st.title("⚡ 高速数据分析 (多核并行版)")
 
-# 【已恢复】详细的使用说明 + 新增的性能说明
-with st.expander("ℹ️ 使用说明 & 数据示例 & 性能原理 (点击展开)", expanded=True):
+with st.expander("ℹ️ 使用说明 & 数据示例 (点击展开)", expanded=True):
     col1, col2 = st.columns([1, 1])
-    
     with col1:
         st.markdown("""
-        ### 📋 数据准备指南
-        1. **格式要求**：请上传 Excel (.xlsx) 或 CSV 文件。
-        2. **表头**：第一行必须是列名（如：品种、处理、产量）。
-        3. **数据结构**：必须是**长格式 (Long Format)**，即每一行代表一个重复样本。
-        4. **自动清洗**：程序会自动尝试将“指标列”转为数字，非数字字符会变成空值。
+        ### 📋 数据准备
+        * **长格式**：每行一个样本。
+        * **列名**：第一行必须是表头。
+        * **兼容性**：支持中文列名，自动处理空值。
         """)
-        
-        # 创建一个虚拟的示例数据
-        demo_data = pd.DataFrame({
-           '品种': ['V1', 'V1', 'V1', 'V2'],
-            '处理': ['CK', 'CK', 'CK', 'CK'],
-            '重复': ['R1', 'R2', 'R3', 'R1'],
-            '产量(kg)': [500.2, 520.5, 480.1, 600.5],
-            '株高(cm)': [100.5, 105.2, 98.4, 110.2]
-        })
-        st.caption("👇 数据格式示例：")
-        st.dataframe(demo_data, height=150)
-
     with col2:
-        st.markdown(f"""
-        ### 🚀 性能与原理
-        * **多核并行**：程序检测到您的设备拥有 **{os.cpu_count() or 4} 个 CPU 核心**。
-        * **加速机制**：采用多进程 (Multi-processing) 技术，同时计算多个指标（如同时算产量和株高），速度比传统串行快数倍。
-        * **注意**：大批量数据分析时，CPU 占用率高属于正常现象。
-        
-        ### ✅ 输出结果说明
-        * **组内 (分列)**：Mean/Letter/SD 分开，适合导入绘图软件 (Origin)。
-        * **组内 (组合)**：Mean±Letter 格式，适合直接粘入论文表格。
-        * **主效应**：大写字母标记 (Uppercase)。
+        st.markdown("""
+        ### ⚙️ 核心设置说明 (侧边栏)
+        * **多因素模型 (推荐)**：使用整体误差 (MSE)。剔除其他因子干扰，灵敏度高。对应 SPSS GLM。
+        * **单因素模型 (保守)**：使用单因素误差。**如果您的 SD 很大且不想看到显著差异，请选此项**。对应 SPSS One-Way ANOVA。
         """)
 
 with st.sidebar:
     st.header("1. 数据上传")
     uploaded_file = st.file_uploader("上传 Excel/CSV", type=['xlsx', 'csv'])
     
-    st.header("2. 参数设置")
+    st.header("2. 因子选择")
     factors = []
     targets = []
     test_factor = None
@@ -389,6 +396,20 @@ with st.sidebar:
             targets = st.multiselect("指标 (Y) - 可多选", all_cols)
             
             st.markdown("---")
+            st.header("3. 统计模型设置")
+            
+            # 【新功能】模型策略选择
+            strategy_label = st.radio(
+                "主效应误差计算方式 (重要)",
+                ('多因素模型误差 (高灵敏/GLM)', '单因素模型误差 (保守/直觉)'),
+                index=0,
+                help="多因素：剥离其他因子干扰，MSE小，容易显著。\n单因素：完全基于原始数据波动，MSE大，不容易显著。"
+            )
+            
+            # 转换选择为代码参数
+            mse_strategy = 'full' if '多因素' in strategy_label else 'oneway'
+            
+            st.markdown("---")
             run_btn = st.button("🚀 启动并行分析", type="primary")
             
         except Exception as e:
@@ -397,7 +418,8 @@ with st.sidebar:
 if uploaded_file and factors and targets and test_factor and run_btn:
     st.divider()
     
-    res = run_parallel_analysis(df, factors, targets, test_factor)
+    # 传入 mse_strategy
+    res = run_parallel_analysis(df, factors, targets, test_factor, mse_strategy)
         
     if res.get('errors'):
         with st.expander("⚠️ 部分指标分析失败", expanded=False):
@@ -427,7 +449,9 @@ if uploaded_file and factors and targets and test_factor and run_btn:
             st.warning("无数据")
 
     with tab3:
-        st.subheader("3. 主效应比较")
+        # 动态标题
+        title_suffix = "(基于单因素误差)" if mse_strategy == 'oneway' else "(基于全模型误差)"
+        st.subheader(f"3. 主效应比较 {title_suffix}")
         if not res['main_effects_table'].empty:
             st.dataframe(res['main_effects_table'], width='stretch')
         else:
@@ -463,6 +487,6 @@ if uploaded_file and factors and targets and test_factor and run_btn:
     st.download_button(
         "📥 下载完整结果 (Excel)",
         data=buffer.getvalue(),
-        file_name="Analysis_Parallel.xlsx",
+        file_name=f"Analysis_{mse_strategy}.xlsx",
         mime="application/vnd.ms-excel"
     )
