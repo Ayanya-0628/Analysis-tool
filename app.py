@@ -89,11 +89,9 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
 # 2. 并行化核心逻辑
 # ==========================================
 
-# 【关键修改】将单个指标的计算逻辑提取出来，使其必须是顶级函数(Top-level)，这样才能被多进程调用
 def process_single_target(target, df_data, factors, test_factor):
     """
     处理单个指标的计算函数，供多进程调用。
-    注意：这里传入的是 dataframe 的副本或切片
     """
     res = {
         'anova_rows': [],
@@ -103,18 +101,14 @@ def process_single_target(target, df_data, factors, test_factor):
     }
     
     try:
-        # 数据再次清洗，确保当前进程拿到的数据是干净的
-        # 必须 dropna，否则 ols 会报错
         current_df = df_data.dropna(subset=[target] + factors).copy()
         
-        # 如果数据为空或太少
         if current_df.empty or len(current_df) < 3:
-            return res # 返回空结果
+            return res 
 
         group_factors = [f for f in factors if f != test_factor]
 
         # --- A. ANOVA ---
-        # 使用 Q() 处理中文或特殊字符列名
         formula = f"Q('{target}') ~ {' * '.join([f'Q(\"{f}\")' for f in factors])}" 
         model = ols(formula, data=current_df).fit()
         
@@ -122,7 +116,6 @@ def process_single_target(target, df_data, factors, test_factor):
         global_mse = model.mse_resid
         global_df_resid = model.df_resid
         
-        # 清理索引名称
         aov_table.index = [idx.replace('Q("', '').replace('")', '') for idx in aov_table.index]
 
         for source, row in aov_table.iterrows():
@@ -196,13 +189,9 @@ def process_single_target(target, df_data, factors, test_factor):
     return res
 
 def run_parallel_analysis(df, factors, targets, test_factor):
-    """
-    并行分析主控制器
-    """
     results = {}
     errors = []
     
-    # 1. 预处理数据：转为 Numeric，准备传入子进程
     work_df = df.copy()
     for f in factors:
         work_df[f] = work_df[f].astype(str).str.strip()
@@ -215,13 +204,10 @@ def run_parallel_analysis(df, factors, targets, test_factor):
         else:
             errors.append(f"指标 '{t_col}' 全为空值，跳过。")
 
-    # 容器初始化
     all_anova = []
     all_main = []
     all_sliced = []
 
-    # 2. 【核心】配置多进程执行器
-    # max_workers 默认为 CPU 核心数。如果内存吃紧，可以手动改为 2 或 4
     max_workers = os.cpu_count() or 4
     
     status_text = st.empty()
@@ -232,9 +218,6 @@ def run_parallel_analysis(df, factors, targets, test_factor):
     start_time = time.time()
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # 提交任务
-        # 注意：这里我们将 work_df 传给每个子进程。
-        # 对于超大数据集，这可能会消耗内存（因为 Copy-on-Write），但对于一般 Excel 几万行没问题。
         future_to_target = {
             executor.submit(process_single_target, t, work_df[[t] + factors], factors, test_factor): t 
             for t in valid_targets
@@ -257,19 +240,17 @@ def run_parallel_analysis(df, factors, targets, test_factor):
                 errors.append(f"{t_name} 进程崩溃: {exc}")
             
             completed_count += 1
-            progress = completed_count / total_tasks
-            progress_bar.progress(progress)
+            if total_tasks > 0:
+                progress = completed_count / total_tasks
+                progress_bar.progress(progress)
             status_text.write(f"正在处理: {completed_count}/{total_tasks} ({t_name})")
 
     elapsed_time = time.time() - start_time
     status_text.success(f"✅ 分析完成！耗时: {elapsed_time:.2f} 秒")
-    time.sleep(1) # 稍微展示一下完成状态
+    time.sleep(1)
     status_text.empty()
     progress_bar.empty()
 
-    # 3. 结果聚合与 Pivot (这一步很快，单线程即可)
-    
-    # ANOVA 表
     if all_anova:
         results['anova_table'] = pd.DataFrame(all_anova).pivot_table(
             index='Source', columns='Trait', values='F_Sig', aggfunc='first'
@@ -277,7 +258,6 @@ def run_parallel_analysis(df, factors, targets, test_factor):
     else:
         results['anova_table'] = pd.DataFrame()
 
-    # 主效应表
     if all_main:
         me_df = pd.DataFrame(all_main)
         me_pivot = me_df.pivot_table(
@@ -287,19 +267,16 @@ def run_parallel_analysis(df, factors, targets, test_factor):
     else:
         results['main_effects_table'] = pd.DataFrame()
 
-    # 切片比较表
     if all_sliced:
         sc_df = pd.DataFrame(all_sliced)
         group_factors = [f for f in factors if f != test_factor]
         pivot_index = group_factors + [test_factor]
         
-        # 格式一
         sc_pivot_sep = sc_df.pivot_table(
             index=pivot_index, columns='Trait', values=['Mean', 'Letter', 'SD'], aggfunc='first'
         )
         sc_pivot_sep = sc_pivot_sep.swaplevel(0, 1, axis=1).sort_index(axis=1, level=0)
         
-        # 重排顺序 Mean -> Letter -> SD
         sorted_traits = sc_pivot_sep.columns.get_level_values(0).unique()
         new_columns = []
         for t in sorted_traits:
@@ -308,7 +285,6 @@ def run_parallel_analysis(df, factors, targets, test_factor):
                     new_columns.append((t, val))
         results['sliced_table_sep'] = sc_pivot_sep.reindex(columns=new_columns)
         
-        # 格式二
         sc_pivot_comb = sc_df.pivot_table(
             index=pivot_index, columns='Trait', values=['Mean_Letter'], aggfunc='first'
         )
@@ -317,10 +293,9 @@ def run_parallel_analysis(df, factors, targets, test_factor):
         results['sliced_table_sep'] = pd.DataFrame()
         results['sliced_table_comb'] = pd.DataFrame()
 
-    # 4. 相关性分析 (向量化计算，本身极快，无需并行)
     if len(valid_targets) > 1:
-        corr_df = work_df[valid_targets].corr() # 快速计算 r
-        pval_df = work_df[valid_targets].corr(method=lambda x, y: pearsonr(x, y)[1]) # 计算 p值
+        corr_df = work_df[valid_targets].corr() 
+        pval_df = work_df[valid_targets].corr(method=lambda x, y: pearsonr(x, y)[1]) 
         
         corr_matrix = pd.DataFrame(index=valid_targets, columns=valid_targets)
         for r_idx in valid_targets:
@@ -348,14 +323,42 @@ def run_parallel_analysis(df, factors, targets, test_factor):
 st.set_page_config(page_title="数据分析 (并行加速版)", layout="wide", page_icon="⚡")
 st.title("⚡ 高速数据分析 (多核并行版)")
 
-with st.expander("ℹ️ 性能说明"):
-    st.markdown(f"""
-    **加速原理：**
-    * 本程序已启用 **多进程并行 (Multi-processing)** 技术。
-    * 检测到您拥有 **{os.cpu_count()} 个 CPU 核心**。
-    * 程序将同时分析多个指标，而不是一个接一个地排队分析。
-    * *注：GPU 加速不适用于此类统计分析（statsmodels 库限制），CPU 多核并行是目前最优解。*
-    """)
+# 【已恢复】详细的使用说明 + 新增的性能说明
+with st.expander("ℹ️ 使用说明 & 数据示例 & 性能原理 (点击展开)", expanded=True):
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("""
+        ### 📋 数据准备指南
+        1. **格式要求**：请上传 Excel (.xlsx) 或 CSV 文件。
+        2. **表头**：第一行必须是列名（如：品种、处理、产量）。
+        3. **数据结构**：必须是**长格式 (Long Format)**，即每一行代表一个重复样本。
+        4. **自动清洗**：程序会自动尝试将“指标列”转为数字，非数字字符会变成空值。
+        """)
+        
+        # 创建一个虚拟的示例数据
+        demo_data = pd.DataFrame({
+           '品种': ['V1', 'V1', 'V1', 'V2'],
+            '处理': ['CK', 'CK', 'CK', 'CK'],
+            '重复': ['R1', 'R2', 'R3', 'R1'],
+            '产量(kg)': [500.2, 520.5, 480.1, 600.5],
+            '株高(cm)': [100.5, 105.2, 98.4, 110.2]
+        })
+        st.caption("👇 数据格式示例：")
+        st.dataframe(demo_data, height=150)
+
+    with col2:
+        st.markdown(f"""
+        ### 🚀 性能与原理
+        * **多核并行**：程序检测到您的设备拥有 **{os.cpu_count() or 4} 个 CPU 核心**。
+        * **加速机制**：采用多进程 (Multi-processing) 技术，同时计算多个指标（如同时算产量和株高），速度比传统串行快数倍。
+        * **注意**：大批量数据分析时，CPU 占用率高属于正常现象。
+        
+        ### ✅ 输出结果说明
+        * **组内 (分列)**：Mean/Letter/SD 分开，适合导入绘图软件 (Origin)。
+        * **组内 (组合)**：Mean±Letter 格式，适合直接粘入论文表格。
+        * **主效应**：大写字母标记 (Uppercase)。
+        """)
 
 with st.sidebar:
     st.header("1. 数据上传")
@@ -394,16 +397,13 @@ with st.sidebar:
 if uploaded_file and factors and targets and test_factor and run_btn:
     st.divider()
     
-    # 直接调用并行分析函数
     res = run_parallel_analysis(df, factors, targets, test_factor)
         
-    # 显示错误报告
     if res.get('errors'):
         with st.expander("⚠️ 部分指标分析失败", expanded=False):
             for err in res['errors']:
                 st.warning(err)
     
-    # 结果展示
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📈 组内 (分列)", 
         "📑 组内 (组合)", 
@@ -447,7 +447,6 @@ if uploaded_file and factors and targets and test_factor and run_btn:
         else:
             st.info("数据不足以计算相关性")
     
-    # 下载部分
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer) as writer:
         if not res['sliced_table_sep'].empty: 
