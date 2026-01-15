@@ -348,8 +348,8 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
 # 3. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="数据分析 (并行+模型选择)", layout="wide", page_icon="⚡")
-st.title("⚡ 高速数据分析 (多核并行版)")
+st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
+st.title("⚡ 数据分析")
 
 with st.expander("ℹ️ 使用说明 & 数据示例 (点击展开)", expanded=True):
     col1, col2 = st.columns([1, 1])
@@ -401,7 +401,7 @@ with st.sidebar:
             # 【新功能】模型策略选择
             strategy_label = st.radio(
                 "主效应误差计算方式 (重要)",
-                ('多因素模型误差 (高灵敏/GLM)', '单因素模型误差 (保守/直觉)'),
+                ('多因素模型误差(GLM)', '单因素模型误差'),
                 index=0,
                 help="多因素：剥离其他因子干扰，MSE小，容易显著。\n单因素：完全基于原始数据波动，MSE大，不容易显著。"
             )
@@ -490,3 +490,4 @@ if uploaded_file and factors and targets and test_factor and run_btn:
         file_name=f"Analysis_{mse_strategy}.xlsx",
         mime="application/vnd.ms-excel"
     )
+
