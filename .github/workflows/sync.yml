@@ -18,6 +18,12 @@ jobs:
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           
-          # 直接使用您提供的完整链接（包含 oauth2 用户名和 token）
-          # 这样可以避开所有 Secrets 配置错误的坑
-          git push -f https://oauth2:ms-9a3208fc-b312-49a0-ad9e-33db2441f43a@www.modelscope.cn/studios/lyshang9989/Analysis.git HEAD:master
+          # 1. 设置远程仓库地址
+          git remote add ms https://oauth2:ms-9a3208fc-b312-49a0-ad9e-33db2441f43a@www.modelscope.cn/studios/lyshang9989/Analysis.git
+          
+          # 2. 【关键】先从魔搭拉取代码（忽略历史差异），解决冲突
+          # 这一步是为了防止 "refusing to merge unrelated histories" 错误
+          git pull ms master --allow-unrelated-histories -X ours || echo "Pull failed, trying force push directly"
+
+          # 3. 强制推送到魔搭的 master 分支
+          git push -f ms HEAD:master
