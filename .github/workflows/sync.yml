@@ -1,0 +1,24 @@
+name: Sync to ModelScope
+
+on:
+  push:
+    branches: [ main ]  # 监听 GitHub 的 main 分支
+
+jobs:
+  sync-to-modelscope:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Push to ModelScope
+        run: |
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          
+          # 【核心修改】
+          # 将 GitHub 当前的 main 分支 (HEAD)
+          # 强制推送到 魔搭 的 master 分支 (HEAD:master)
+          git push -f https://${{ secrets.MODELSCOPE_USERNAME }}:${{ secrets.MODELSCOPE_TOKEN }}@www.modelscope.cn/studios/lyshang9989/Analysis.git HEAD:master
