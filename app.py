@@ -349,9 +349,9 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
 # ==========================================
 
 st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
-st.title("⚡ 数据分析")
+st.title("数据分析")
 
-with st.expander("ℹ️ 使用说明 & 数据示例 (点击展开)", expanded=True):
+with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
     col1, col2 = st.columns([1, 1])
     with col1:
         # ===========================================
@@ -497,3 +497,4 @@ if uploaded_file and factors and targets and test_factor and run_btn:
         file_name=f"Analysis_{mse_strategy}.xlsx",
         mime="application/vnd.ms-excel"
     )
+
