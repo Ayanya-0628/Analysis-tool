@@ -8,22 +8,32 @@ jobs:
   sync-to-modelscope:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
+      - name: Checkout GitHub source
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
 
-      - name: Push to ModelScope
+      - name: Sync to ModelScope
         run: |
+          # 1. 配置 Git 用户信息
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           
-          # 1. 设置远程仓库地址
-          git remote add ms https://oauth2:ms-9a3208fc-b312-49a0-ad9e-33db2441f43a@www.modelscope.cn/studios/lyshang9989/Analysis.git
+          # 定义魔搭的仓库地址（直接用您提供的完整地址）
+          MS_URL="https://oauth2:ms-9a3208fc-b312-49a0-ad9e-33db2441f43a@www.modelscope.cn/studios/lyshang9989/Analysis.git"
           
-          # 2. 【关键】先从魔搭拉取代码（忽略历史差异），解决冲突
-          # 这一步是为了防止 "refusing to merge unrelated histories" 错误
-          git pull ms master --allow-unrelated-histories -X ours || echo "Pull failed, trying force push directly"
-
-          # 3. 强制推送到魔搭的 master 分支
-          git push -f ms HEAD:master
+          # 2. 把魔搭的代码克隆到一个临时文件夹 "temp_ms"
+          git clone $MS_URL temp_ms
+          
+          # 3. 使用 rsync 工具，把 GitHub 的代码“同步”到 "temp_ms" 文件夹
+          # --delete 意思是：如果 GitHub 删了某个文件，魔搭那边也要删掉，保持完全一致
+          # --exclude 排除 .git 和 .github 文件夹，防止配置冲突
+          rsync -av --progress . temp_ms --exclude .git --exclude .github --delete
+          
+          # 4. 进入临时文件夹，提交变更并推送
+          cd temp_ms
+          git add .
+          
+          # 如果没有变化，commit 会报错，所以加个 || echo 忽略错误
+          git commit -m "Auto-sync from GitHub Actions" || echo "No changes to commit"
+          
+          # 5. 正常推送（注意：这里不再使用 -f 强制推送，所以不会报错了！）
+          git push origin master
