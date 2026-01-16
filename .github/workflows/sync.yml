@@ -2,7 +2,7 @@ name: Sync to ModelScope
 
 on:
   push:
-    branches: [ main ]  # 监听 GitHub 的 main 分支
+    branches: [ main ]
 
 jobs:
   sync-to-modelscope:
@@ -18,7 +18,6 @@ jobs:
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           
-          # 【核心修改】
-          # 将 GitHub 当前的 main 分支 (HEAD)
-          # 强制推送到 魔搭 的 master 分支 (HEAD:master)
-          git push -f https://${{ secrets.MODELSCOPE_USERNAME }}:${{ secrets.MODELSCOPE_TOKEN }}@www.modelscope.cn/studios/lyshang9989/Analysis.git HEAD:master
+          # 直接使用您提供的完整链接（包含 oauth2 用户名和 token）
+          # 这样可以避开所有 Secrets 配置错误的坑
+          git push -f https://oauth2:ms-9a3208fc-b312-49a0-ad9e-33db2441f43a@www.modelscope.cn/studios/lyshang9989/Analysis.git HEAD:master
