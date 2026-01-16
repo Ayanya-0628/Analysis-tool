@@ -86,7 +86,7 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     return final_res
 
 # ==========================================
-# 2. 并行化核心逻辑 (已修改)
+# 2. 并行化核心逻辑 (保持不变)
 # ==========================================
 
 def process_single_target(target, df_data, factors, test_factor, mse_strategy):
@@ -110,7 +110,11 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
         group_factors = [f for f in factors if f != test_factor]
 
         # --- A. ANOVA (始终基于全模型输出 F 值，这是标准的) ---
-        formula = f"Q('{target}') ~ {' * '.join([f'Q(\"{f}\")' for f in factors])}" 
+        # 兼容性写法，不使用 f-string 内部反斜杠
+        factor_terms = [f'Q("{f}")' for f in factors]
+        formula_rhs = " * ".join(factor_terms)
+        formula = f"Q('{target}') ~ {formula_rhs}"
+        
         model = ols(formula, data=current_df).fit()
         
         # 获取全模型的 MSE (这是策略 A 用的)
@@ -354,9 +358,6 @@ st.title("数据分析")
 with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
     col1, col2 = st.columns([1, 1])
     with col1:
-        # ===========================================
-        # 🟢 修复点：恢复了表格形式的数据展示
-        # ===========================================
         st.markdown("### 📋 数据准备示例")
         st.markdown("请确保数据符合**长格式 (Long Format)**：")
         demo_data = pd.DataFrame({
@@ -405,11 +406,11 @@ with st.sidebar:
             st.markdown("---")
             st.header("3. 统计模型设置")
             
-            # 【新功能】模型策略选择
+            # 【修改点】index设置为1，默认选中“单因素模型误差”
             strategy_label = st.radio(
                 "主效应误差计算方式 (重要)",
                 ('多因素模型误差(GLM)', '单因素模型误差'),
-                index=0,
+                index=1,
                 help="多因素：剥离其他因子干扰，MSE小，容易显著。\n单因素：完全基于原始数据波动，MSE大，不容易显著。"
             )
             
@@ -497,4 +498,3 @@ if uploaded_file and factors and targets and test_factor and run_btn:
         file_name=f"Analysis_{mse_strategy}.xlsx",
         mime="application/vnd.ms-excel"
     )
-
