@@ -386,7 +386,6 @@ with st.sidebar:
 
 # 主界面区域 (布局修复)
 with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
-    # 🟢 调整比例：左边 0.45，右边 0.55，让表格有更多空间
     col1, col2 = st.columns([0.45, 0.55]) 
     with col1:
         st.markdown("### 📋 数据准备示例")
@@ -395,10 +394,6 @@ with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
             '处理': ['CK', 'TR', 'CK', 'TR'],
             '产量': [500.2, 520.5, 600.5, 620.1],
         })
-        # 🟢 关键修改：
-        # 1. 恢复 st.dataframe
-        # 2. use_container_width=True: 强制填满列宽，消灭右侧留白
-        # 3. hide_index=True: 隐藏索引列，节省空间
         st.dataframe(demo_data, hide_index=True, use_container_width=True)
     with col2:
         st.markdown("""
@@ -410,7 +405,11 @@ with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
 
 if uploaded_file and factors and targets and test_factor:
     st.markdown("###") 
-    run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
+    
+    # 🟢 优化点：使用三列布局将按钮居中，使其宽度适中 (比例 1:2:1)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
 
     if run_btn:
         st.divider()
