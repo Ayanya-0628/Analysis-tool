@@ -360,7 +360,7 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
 # ==========================================
 
 st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
-st.title("🌾 水稻科研数据分析")
+st.title("数据分析")
 
 # 侧边栏
 with st.sidebar:
@@ -422,17 +422,19 @@ with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
     with col1:
         st.markdown("### 📋 数据准备示例")
         demo_data = pd.DataFrame({
-           '品种': ['V1', 'V1', 'V2', 'V2'],
-            '处理': ['CK', 'TR', 'CK', 'TR'],
-            '产量': [500.2, 520.5, 600.5, 620.1],
+           '品种': ['V1', 'V1', 'V1', 'V2'],
+            '处理': ['CK', 'CK', 'CK', 'CK'],
+            '重复': ['R1', 'R2', 'R3', 'R1'],
+            '产量(kg)': [500.2, 520.5, 480.1, 600.5],
+            '株高(cm)': [100.5, 105.2, 98.4, 110.2]
         })
         st.dataframe(demo_data, hide_index=True, use_container_width=True)
     with col2:
         st.markdown("""
         ### 🛠️ 操作提示
         1. **左侧上传数据**，选择对应的因子和指标。
-        2. **下方点击“启动分析”**，无需在侧边栏底部寻找按钮。
-        3. 结果生成后可直接下载 Excel。
+        2. **下方点击“启动分析”**。
+        3. 结果生成后可下载 Excel。
         """)
 
 if uploaded_file and factors and targets and test_factor:
@@ -518,3 +520,4 @@ elif uploaded_file:
     st.info("👈 请在左侧侧边栏选择【因子】和【指标】以激活分析按钮")
 else:
     st.info("👈 请在左侧上传数据文件")
+
