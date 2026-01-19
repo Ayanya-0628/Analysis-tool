@@ -271,7 +271,7 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     status_text = st.empty()
     progress_bar = st.progress(0)
     
-    status_text.write(f"🚀 正在启动 {max_workers} 个 CPU 核心进行并行计算...")
+    status_text.write(f"🚀 正在启动 {4} 个 CPU 核心进行并行计算...")
     
     start_time = time.time()
     
@@ -538,3 +538,4 @@ elif uploaded_file:
     st.info("👈 请在左侧侧边栏选择【因子】和【指标】以激活分析按钮")
 else:
     st.info("👈 请在左侧上传数据文件")
+
