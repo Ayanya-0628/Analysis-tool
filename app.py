@@ -11,6 +11,34 @@ import os
 import time
 
 # ==========================================
+# 0. UI 美化工具 (新增部分)
+# ==========================================
+
+def styled_tag(text, icon=""):
+    """
+    渲染一个胶囊形状的标题
+    """
+    st.markdown(f"""
+    <div style="
+        display: inline-flex;
+        align-items: center;
+        background-color: #e3f2fd; /* 淡蓝色背景 */
+        color: #1565c0; /* 深蓝色文字 */
+        padding: 6px 16px;
+        border-radius: 20px; /* 圆角胶囊形状 */
+        font-weight: 600;
+        font-size: 15px;
+        margin-bottom: 15px;
+        margin-top: 5px;
+        border: 1px solid #bbdefb;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    ">
+        <span style="margin-right: 8px; font-size: 18px;">{icon}</span>
+        {text}
+    </div>
+    """, unsafe_allow_html=True)
+
+# ==========================================
 # 1. 核心统计工具 (保持不变)
 # ==========================================
 
@@ -328,7 +356,7 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     return results
 
 # ==========================================
-# 3. Streamlit 界面 (布局优化版)
+# 3. Streamlit 界面 (胶囊样式版)
 # ==========================================
 
 st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
@@ -336,10 +364,14 @@ st.title("🌾 水稻科研数据分析")
 
 # 侧边栏
 with st.sidebar:
-    st.header("1. 数据上传")
-    uploaded_file = st.file_uploader("上传 Excel/CSV", type=['xlsx', 'csv'])
+    # 🟢 使用 styled_tag 替代原本的 st.header("1. 数据上传")
+    styled_tag("数据上传", icon="📂")
     
-    st.header("2. 因子选择")
+    uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'])
+    
+    # 🟢 使用 styled_tag 替代 st.header("2. 因子选择")
+    styled_tag("因子选择", icon="🧬")
+    
     factors = []
     targets = []
     test_factor = None
@@ -384,7 +416,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"读取错误: {e}")
 
-# 主界面区域 (布局修复)
+# 主界面区域
 with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
     col1, col2 = st.columns([0.45, 0.55]) 
     with col1:
@@ -406,7 +438,6 @@ with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
 if uploaded_file and factors and targets and test_factor:
     st.markdown("###") 
     
-    # 🟢 优化点：使用三列布局将按钮居中，使其宽度适中 (比例 1:2:1)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
