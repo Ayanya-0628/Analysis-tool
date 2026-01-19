@@ -334,7 +334,7 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
 st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
 st.title("🌾 水稻科研数据分析")
 
-# 侧边栏：只放必要的设置
+# 侧边栏
 with st.sidebar:
     st.header("1. 数据上传")
     uploaded_file = st.file_uploader("上传 Excel/CSV", type=['xlsx', 'csv'])
@@ -343,11 +343,10 @@ with st.sidebar:
     factors = []
     targets = []
     test_factor = None
-    mse_strategy = 'oneway' # 默认值，防止未定义
+    mse_strategy = 'oneway' 
     
     if uploaded_file:
         try:
-            # Sheet 选择逻辑
             if uploaded_file.name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file)
             else:
@@ -373,7 +372,6 @@ with st.sidebar:
             targets = st.multiselect("指标 (Y)", all_cols)
             
             st.markdown("---")
-            # 🟢 优化点：使用折叠框收纳高级设置，节省侧边栏空间
             with st.expander("⚙️ 模型设置 (默认单因素)", expanded=False):
                 strategy_label = st.radio(
                     "误差计算方式",
@@ -386,17 +384,20 @@ with st.sidebar:
         except Exception as e:
             st.error(f"读取错误: {e}")
 
-# 主界面区域
+# 主界面区域 (使用 Markdown 表格替换 DataFrame)
 with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([1.2, 1]) # 给表格稍微多一点宽度
     with col1:
         st.markdown("### 📋 数据准备示例")
-        demo_data = pd.DataFrame({
-           '品种': ['V1', 'V1', 'V2', 'V2'],
-            '处理': ['CK', 'TR', 'CK', 'TR'],
-            '产量': [500.2, 520.5, 600.5, 620.1],
-        })
-        st.dataframe(demo_data, height=100, hide_index=True)
+        # 🟢 优化点：使用 Markdown 表格，更紧凑，无滚动条，显示完全
+        st.markdown("""
+        | 品种 | 处理 | 产量 |
+        | :---: | :---: | :---: |
+        | V1 | CK | 500.2 |
+        | V1 | TR | 520.5 |
+        | V2 | CK | 600.5 |
+        | V2 | TR | 620.1 |
+        """, unsafe_allow_html=True)
     with col2:
         st.markdown("""
         ### 🛠️ 操作提示
@@ -405,10 +406,8 @@ with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
         3. 结果生成后可直接下载 Excel。
         """)
 
-# 🟢 优化点：将启动按钮移到主界面顶部，无需滚动侧边栏
 if uploaded_file and factors and targets and test_factor:
-    st.markdown("###") # 增加一点间距
-    # 使用 full_width 让按钮更显眼
+    st.markdown("###") 
     run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
 
     if run_btn:
