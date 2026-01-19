@@ -11,21 +11,21 @@ import os
 import time
 
 # ==========================================
-# 0. UI Beautification Tools
+# 0. UI 美化工具
 # ==========================================
 
 def styled_tag(text, icon=""):
     """
-    Renders a capsule-shaped header
+    渲染一个胶囊形状的标题
     """
     st.markdown(f"""
     <div style="
         display: inline-flex;
         align-items: center;
-        background-color: #e3f2fd; /* Light Blue Background */
-        color: #1565c0; /* Dark Blue Text */
+        background-color: #e3f2fd; /* 淡蓝色背景 */
+        color: #1565c0; /* 深蓝色文字 */
         padding: 6px 16px;
-        border-radius: 20px; /* Rounded Capsule Shape */
+        border-radius: 20px; /* 圆角胶囊形状 */
         font-weight: 600;
         font-size: 15px;
         margin-bottom: 15px;
@@ -39,7 +39,7 @@ def styled_tag(text, icon=""):
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. Core Statistical Tools
+# 1. 核心统计工具
 # ==========================================
 
 def get_stars(p_value):
@@ -114,7 +114,7 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     return final_res
 
 # ==========================================
-# 2. Parallel Core Logic (Multithreading)
+# 2. 并行化核心逻辑 (已修改：使用多线程 + 强制单因素逻辑)
 # ==========================================
 
 def process_single_target(target, df_data, factors, test_factor, mse_strategy):
@@ -133,14 +133,15 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
 
         group_factors = [f for f in factors if f != test_factor]
 
-        # 1. Global ANOVA (For F-values)
+        # 1. 全局 ANOVA (仅用于输出 F 值表)
         factor_terms = [f'Q("{f}")' for f in factors]
-        # Note: Using multiplication (*) to include interaction, calculating global ANOVA
         formula_rhs = " * ".join(factor_terms)
         formula = f"Q('{target}') ~ {formula_rhs}"
         
+        # 即使只计算 F 值，这也可能耗时，放在线程里跑非常合适
         model = ols(formula, data=current_df).fit()
         
+        # 记录全局误差供备用（虽然主要用局部误差）
         global_mse = model.mse_resid
         global_df_resid = model.df_resid
         
@@ -156,11 +157,11 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                 'F_Sig': f_str
             })
         
-        # 2. Main Effects
+        # 2. 主效应 (Main Effects)
         for factor in factors:
             stats = current_df.groupby(factor)[target].agg(['mean', 'std', 'count']).fillna(0)
             
-            # Select error term based on strategy
+            # 策略：如果选单因素，则每个因子单独跑 ANOVA 算 MSE
             if mse_strategy == 'oneway':
                 try:
                     sub_formula = f"Q('{target}') ~ C(Q('{factor}'))"
@@ -191,7 +192,7 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                     'SD': stats.loc[lvl, 'std']
                 })
 
-        # 3. Sliced Comparison - Enforcing Single Factor Logic
+        # 3. 组内比较 (Sliced Comparison) - 强制组内单因素逻辑
         if not group_factors:
             iter_groups = [( "All", current_df )] 
         else:
@@ -210,18 +211,16 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
             if len(stats) < 2:
                 letters = {str(k).strip(): 'a' for k in stats.index}
             else:
-                # 🟢 Force use of local single-factor model (Local MSE)
+                # 🟢 强制组内单因素模型 (Local MSE)
                 try:
                     local_formula = f"Q('{target}') ~ C(Q('{test_factor}'))"
                     local_model = ols(local_formula, data=sub_df).fit()
                     local_mse = local_model.mse_resid
                     local_df = local_model.df_resid
                 except:
-                    # Fallback to global error if data is insufficient
                     local_mse = global_mse
                     local_df = global_df_resid
                 
-                # Use local MSE for LSD test
                 pairwise_res = pairwise_lsd_test_with_mse(stats, local_mse, local_df, alpha=0.05)
                 letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=False)
             
@@ -240,7 +239,7 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                 res['sliced_comparison_rows'].append(row)
                 
     except Exception as e:
-        res['error'] = f"Error processing trait '{target}': {str(e)}"
+        res['error'] = f"指标 '{target}' 出错: {str(e)}"
     
     return res
 
@@ -258,24 +257,25 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
         if not work_df[t_col].dropna().empty:
             valid_targets.append(t_col)
         else:
-            errors.append(f"Trait '{t_col}' contains all empty values, skipping.")
+            errors.append(f"指标 '{t_col}' 全为空值，跳过。")
 
     all_anova = []
     all_main = []
     all_sliced = []
 
-    # Using Multithreading (ThreadPoolExecutor) instead of Multiprocessing
-    # This avoids the heavy startup overhead of processes on Windows
-    max_workers = min(32, os.cpu_count() + 4) 
+    # 🟢 切换为 ThreadPoolExecutor (多线程)
+    # 线程启动开销极小，适合大量的中小型计算任务
+    # 设置 max_workers 为 CPU 核心数 + 4 (Python 官方推荐的 I/O 密集型默认值，虽然我们是计算密集型，但 NumPy 会释放 GIL)
+    max_workers = min(32, (os.cpu_count() or 1) + 4)
     
     status_text = st.empty()
     progress_bar = st.progress(0)
     
-    status_text.write(f"🚀 Launching {max_workers} threads for parallel calculation...")
+    status_text.write(f"🚀 正在启动 {max_workers} 个线程进行极速分析...")
     
     start_time = time.time()
     
-    # 🟢 Change: ProcessPoolExecutor -> ThreadPoolExecutor
+    # 使用线程池
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_target = {
             executor.submit(process_single_target, t, work_df[[t] + factors], factors, test_factor, mse_strategy): t 
@@ -296,16 +296,16 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
                     all_main.extend(data['main_effects_rows'])
                     all_sliced.extend(data['sliced_comparison_rows'])
             except Exception as exc:
-                errors.append(f"{t_name} process crashed: {exc}")
+                errors.append(f"{t_name} 线程出错: {exc}")
             
             completed_count += 1
             if total_tasks > 0:
                 progress = completed_count / total_tasks
                 progress_bar.progress(progress)
-            status_text.write(f"Processing: {completed_count}/{total_tasks} ({t_name})")
+            status_text.write(f"正在处理: {completed_count}/{total_tasks} ({t_name})")
 
     elapsed_time = time.time() - start_time
-    status_text.success(f"✅ Analysis Complete! Time taken: {elapsed_time:.2f} seconds")
+    status_text.success(f"✅ 分析完成！耗时: {elapsed_time:.2f} 秒")
     time.sleep(1)
     status_text.empty()
     progress_bar.empty()
@@ -376,24 +376,24 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     return results
 
 # ==========================================
-# 3. Streamlit Interface (Capsule Style)
+# 3. Streamlit 界面 (胶囊样式版)
 # ==========================================
 
-st.set_page_config(page_title="Data Analysis", layout="wide", page_icon="⚡")
-st.title("Data Analysis")
+st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
+st.title("数据分析")
 
-# Sidebar
+# 侧边栏
 with st.sidebar:
-    styled_tag("Data Upload", icon="📂")
+    styled_tag("数据上传", icon="📂")
     
-    uploaded_file = st.file_uploader("Select Excel/CSV File", type=['xlsx', 'csv'])
+    uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'])
     
-    styled_tag("Factor Selection", icon="🧬")
+    styled_tag("因子选择", icon="🧬")
     
     factors = []
     targets = []
     test_factor = None
-    # Default strategy
+    # 默认单因素策略
     mse_strategy = 'oneway' 
     
     if uploaded_file:
@@ -404,8 +404,8 @@ with st.sidebar:
                 excel_file = pd.ExcelFile(uploaded_file)
                 sheet_names = excel_file.sheet_names
                 if len(sheet_names) > 1:
-                    st.success(f"📂 Contains {len(sheet_names)} Sheets")
-                    selected_sheet = st.selectbox("Select Sheet:", sheet_names)
+                    st.success(f"📂 包含 {len(sheet_names)} 个Sheet")
+                    selected_sheet = st.selectbox("选择工作表:", sheet_names)
                     df = excel_file.parse(selected_sheet)
                 else:
                     df = excel_file.parse(0)
@@ -414,46 +414,46 @@ with st.sidebar:
             all_cols = df.columns.tolist()
             
             st.markdown("---")
-            factors = st.multiselect("Factors (X)", all_cols)
+            factors = st.multiselect("因子 (X)", all_cols)
             
             if factors:
                 default_idx = len(factors) - 1
-                test_factor = st.selectbox("Comparison Factor (for sliced comparison)", factors, index=default_idx)
+                test_factor = st.selectbox("比较因子 (用于组内比较)", factors, index=default_idx)
             
-            targets = st.multiselect("Traits (Y)", all_cols)
+            targets = st.multiselect("指标 (Y)", all_cols)
             
             st.markdown("---")
-            with st.expander("⚙️ Model Settings (Default Single Factor)", expanded=False):
+            with st.expander("⚙️ 模型设置 (默认单因素)", expanded=False):
                 strategy_label = st.radio(
-                    "Error Calculation Method (Main Effects)",
-                    ('Multi-factor Model Error (GLM)', 'Single Factor Model Error'),
+                    "误差计算方式 (主效应)",
+                    ('多因素模型误差(GLM)', '单因素模型误差'),
                     index=1,
-                    help="Note: Sliced comparison enforces single factor model error, consistent with the desktop version."
+                    help="注意：组内比较已强制使用单因素模型误差，与桌面版保持一致。"
                 )
-                mse_strategy = 'full' if 'Multi' in strategy_label else 'oneway'
+                mse_strategy = 'full' if '多因素' in strategy_label else 'oneway'
             
         except Exception as e:
-            st.error(f"Read Error: {e}")
+            st.error(f"读取错误: {e}")
 
-# Main Interface Area
-with st.expander("ℹ️ Instructions (Click to expand)", expanded=True):
+# 主界面区域
+with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
     col1, col2 = st.columns([0.45, 0.55]) 
     with col1:
-        st.markdown("### 📋 Data Preparation Example")
+        st.markdown("### 📋 数据准备示例")
         demo_data = pd.DataFrame({
-           'Variety': ['V1', 'V1', 'V1', 'V2'],
-            'Treatment': ['CK', 'CK', 'CK', 'CK'],
-            'Rep': ['R1', 'R2', 'R3', 'R1'],
-            'Yield(kg)': [500.2, 520.5, 480.1, 600.5],
-            'Height(cm)': [100.5, 105.2, 98.4, 110.2]
+           '品种': ['V1', 'V1', 'V1', 'V2'],
+            '处理': ['CK', 'CK', 'CK', 'CK'],
+            '重复': ['R1', 'R2', 'R3', 'R1'],
+            '产量(kg)': [500.2, 520.5, 480.1, 600.5],
+            '株高(cm)': [100.5, 105.2, 98.4, 110.2]
         })
         st.dataframe(demo_data, hide_index=True, use_container_width=True)
     with col2:
         st.markdown("""
-        ### 🛠️ Operation Tips
-        1. **Upload data on the left**, select corresponding factors and traits.
-        2. **Click 'Start Analysis' below**.
-        3. Download Excel after results are generated.
+        ### 🛠️ 操作提示
+        1. **左侧上传数据**，选择对应的因子和指标。
+        2. **下方点击“启动分析”**。
+        3. 结果生成后可下载 Excel。
         """)
 
 if uploaded_file and factors and targets and test_factor:
@@ -461,81 +461,81 @@ if uploaded_file and factors and targets and test_factor:
     
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        run_btn = st.button("🚀 Start Parallel Analysis", type="primary", use_container_width=True)
+        run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
 
     if run_btn:
         st.divider()
         res = run_parallel_analysis(df, factors, targets, test_factor, mse_strategy)
             
         if res.get('errors'):
-            with st.expander("⚠️ Some traits failed to analyze", expanded=False):
+            with st.expander("⚠️ 部分指标分析失败", expanded=False):
                 for err in res['errors']:
                     st.warning(err)
         
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📈 Sliced (Sep)", 
-            "📑 Sliced (Comb)", 
-            "🏆 Main Effects", 
+            "📈 组内 (分列)", 
+            "📑 组内 (组合)", 
+            "🏆 主效应", 
             "🧮 ANOVA", 
-            "🔗 Correlation"
+            "🔗 相关性"
         ])
         
         with tab1:
-            st.subheader(f"1. Sliced Comparison - Separated Data")
+            st.subheader(f"1. 组内比较 - 分列数据")
             if not res['sliced_table_sep'].empty:
                 st.dataframe(res['sliced_table_sep'], width='stretch')
             else:
-                st.warning("No Data")
+                st.warning("无数据")
 
         with tab2:
-            st.subheader(f"2. Sliced Comparison - Combined Labels")
+            st.subheader(f"2. 组内比较 - 组合标签")
             if not res['sliced_table_comb'].empty:
                 st.dataframe(res['sliced_table_comb'], width='stretch')
             else:
-                st.warning("No Data")
+                st.warning("无数据")
 
         with tab3:
-            title_suffix = "(Based on Single Factor Error)" if mse_strategy == 'oneway' else "(Based on Full Model Error)"
-            st.subheader(f"3. Main Effects Comparison {title_suffix}")
+            title_suffix = "(基于单因素误差)" if mse_strategy == 'oneway' else "(基于全模型误差)"
+            st.subheader(f"3. 主效应比较 {title_suffix}")
             if not res['main_effects_table'].empty:
                 st.dataframe(res['main_effects_table'], width='stretch')
             else:
-                st.warning("No Data")
+                st.warning("无数据")
 
         with tab4:
-            st.subheader("4. ANOVA (F-value)")
+            st.subheader("4. 方差分析 (F-value)")
             if not res['anova_table'].empty:
                 st.dataframe(res['anova_table'], width='stretch')
             else:
-                st.warning("No Data")
+                st.warning("无数据")
 
         with tab5:
-            st.subheader("5. Correlation Matrix")
+            st.subheader("5. 相关性矩阵")
             if not res['correlation'].empty:
                 st.dataframe(res['correlation'], width='stretch')
             else:
-                st.info("Data insufficient for correlation analysis")
+                st.info("数据不足以计算相关性")
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer) as writer:
             if not res['sliced_table_sep'].empty: 
-                res['sliced_table_sep'].to_excel(writer, sheet_name='Sliced_Sep_Data')
+                res['sliced_table_sep'].to_excel(writer, sheet_name='组内_分列数据')
             if not res['sliced_table_comb'].empty: 
-                res['sliced_table_comb'].to_excel(writer, sheet_name='Sliced_Comb_Label')
+                res['sliced_table_comb'].to_excel(writer, sheet_name='组内_组合标签')
             if not res['main_effects_table'].empty: 
-                res['main_effects_table'].to_excel(writer, sheet_name='Main_Effects_Upper')
+                res['main_effects_table'].to_excel(writer, sheet_name='主效应_大写')
             if not res['anova_table'].empty: 
                 res['anova_table'].to_excel(writer, sheet_name='ANOVA')
             if not res['correlation'].empty: 
-                res['correlation'].to_excel(writer, sheet_name='Correlation')
+                res['correlation'].to_excel(writer, sheet_name='相关分析')
             
         st.download_button(
-            "📥 Download Full Results (Excel)",
+            "📥 下载完整结果 (Excel)",
             data=buffer.getvalue(),
             file_name=f"Analysis_{mse_strategy}.xlsx",
             mime="application/vnd.ms-excel"
         )
 elif uploaded_file:
-    st.info("👈 Please select [Factors] and [Traits] in the sidebar to activate the analysis button")
+    st.info("👈 请在左侧侧边栏选择【因子】和【指标】以激活分析按钮")
 else:
-    st.info("👈 Please upload a data file on the left")
+    st.info("👈 请在左侧上传数据文件")
