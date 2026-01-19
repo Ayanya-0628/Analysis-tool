@@ -11,7 +11,7 @@ import os
 import time
 
 # ==========================================
-# 0. UI 美化工具 (新增部分)
+# 0. UI 美化工具
 # ==========================================
 
 def styled_tag(text, icon=""):
@@ -39,7 +39,7 @@ def styled_tag(text, icon=""):
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. 核心统计工具 (保持不变)
+# 1. 核心统计工具
 # ==========================================
 
 def get_stars(p_value):
@@ -114,7 +114,7 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     return final_res
 
 # ==========================================
-# 2. 并行化核心逻辑 (保持不变)
+# 2. 并行化核心逻辑 (已修改：统一组内逻辑)
 # ==========================================
 
 def process_single_target(target, df_data, factors, test_factor, mse_strategy):
@@ -133,7 +133,9 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
 
         group_factors = [f for f in factors if f != test_factor]
 
+        # 1. 全局 ANOVA (用于 F 值表)
         factor_terms = [f'Q("{f}")' for f in factors]
+        # 注意：这里使用乘法(*)表示包含交互作用，计算全局 ANOVA
         formula_rhs = " * ".join(factor_terms)
         formula = f"Q('{target}') ~ {formula_rhs}"
         
@@ -154,9 +156,11 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                 'F_Sig': f_str
             })
         
+        # 2. 主效应 (Main Effects)
         for factor in factors:
             stats = current_df.groupby(factor)[target].agg(['mean', 'std', 'count']).fillna(0)
             
+            # 根据策略选择误差项
             if mse_strategy == 'oneway':
                 try:
                     sub_formula = f"Q('{target}') ~ C(Q('{factor}'))"
@@ -187,6 +191,7 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                     'SD': stats.loc[lvl, 'std']
                 })
 
+        # 3. 组内比较 (Sliced Comparison) - 🟢 核心修改处
         if not group_factors:
             iter_groups = [( "All", current_df )] 
         else:
@@ -205,7 +210,20 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
             if len(stats) < 2:
                 letters = {str(k).strip(): 'a' for k in stats.index}
             else:
-                pairwise_res = pairwise_lsd_test_with_mse(stats, global_mse, global_df_resid, alpha=0.05)
+                # 🟢 强制使用组内单因素模型 (Local MSE)，与桌面软件保持一致
+                # 不论全局策略如何，组内比较通常希望只看该组内数据的变异
+                try:
+                    local_formula = f"Q('{target}') ~ C(Q('{test_factor}'))"
+                    local_model = ols(local_formula, data=sub_df).fit()
+                    local_mse = local_model.mse_resid
+                    local_df = local_model.df_resid
+                except:
+                    # 如果数据量不足导致无法拟合，回退到全局误差
+                    local_mse = global_mse
+                    local_df = global_df_resid
+                
+                # 使用局部 MSE 进行 LSD 检验
+                pairwise_res = pairwise_lsd_test_with_mse(stats, local_mse, local_df, alpha=0.05)
                 letters = solve_clique_cld(stats['mean'], pairwise_res, use_uppercase=False)
             
             for lvl in stats.index:
@@ -247,6 +265,7 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     all_main = []
     all_sliced = []
 
+    # 简单的并行控制，防止Streamlit资源过载
     max_workers = os.cpu_count() or 4
     
     status_text = st.empty()
@@ -364,17 +383,16 @@ st.title("数据分析")
 
 # 侧边栏
 with st.sidebar:
-    # 🟢 使用 styled_tag 替代原本的 st.header("1. 数据上传")
     styled_tag("数据上传", icon="📂")
     
     uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'])
     
-    # 🟢 使用 styled_tag 替代 st.header("2. 因子选择")
     styled_tag("因子选择", icon="🧬")
     
     factors = []
     targets = []
     test_factor = None
+    # 虽然这里有选项，但组内比较现在会强制使用 Single Factor (Oneway) 逻辑
     mse_strategy = 'oneway' 
     
     if uploaded_file:
@@ -406,10 +424,10 @@ with st.sidebar:
             st.markdown("---")
             with st.expander("⚙️ 模型设置 (默认单因素)", expanded=False):
                 strategy_label = st.radio(
-                    "误差计算方式",
+                    "误差计算方式 (主效应)",
                     ('多因素模型误差(GLM)', '单因素模型误差'),
                     index=1,
-                    help="多因素：剥离其他因子干扰，MSE小。\n单因素：完全基于原始数据波动，MSE大。"
+                    help="注意：组内比较已强制使用单因素模型误差，与桌面版保持一致。"
                 )
                 mse_strategy = 'full' if '多因素' in strategy_label else 'oneway'
             
