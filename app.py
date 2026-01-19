@@ -15,10 +15,7 @@ import time
 # ==========================================
 
 def reset_analysis():
-    """
-    当用户修改任何参数时，调用此函数重置分析状态。
-    强制用户必须再次点击“启动分析”按钮。
-    """
+    """当用户修改参数时重置状态"""
     st.session_state.run_analysis = False
 
 def styled_tag(text, icon=""):
@@ -60,11 +57,13 @@ def pairwise_lsd_test_with_mse(stats_df, mse, df_resid, alpha=0.05):
         m2, n2 = stats_df.loc[g2, 'mean'], stats_df.loc[g2, 'count']
         diff = m1 - m2
         se = np.sqrt(mse * (1/n1 + 1/n2))
+        
         if se <= 1e-10: 
             p_val = 1.0
         else:
             t_stat = abs(diff) / se
             p_val = 2 * (1 - t.cdf(t_stat, df_resid))
+        
         reject = p_val < alpha
         results.append([g1, g2, diff, p_val, reject])
     return results
@@ -83,6 +82,7 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
                     adj[i, j] = False
                     adj[j, i] = False
     np.fill_diagonal(adj, False)
+    
     cliques = []
     def bron_kerbosch(R, P, X):
         if len(P) == 0 and len(X) == 0:
@@ -97,7 +97,9 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
             bron_kerbosch(R.union({v}), P.intersection(neighbors_v), X.intersection(neighbors_v))
             P.remove(v)
             X.add(v)
+    
     bron_kerbosch(set(), set(range(n)), set())
+    
     clique_means = []
     for clq in cliques:
         avg_mean = np.mean([means.iloc[i] for i in clq])
@@ -106,10 +108,12 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     
     letters_list = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if use_uppercase else "abcdefghijklmnopqrstuvwxyz"
     group_letters = {i: "" for i in range(n)}
+    
     for idx, (avg, clq) in enumerate(clique_means):
         char = letters_list[idx] if idx < len(letters_list) else "?"
         for node_idx in clq:
             group_letters[node_idx] += char
+            
     final_res = {}
     original_index = means.index.tolist()
     for i in range(n):
@@ -141,13 +145,12 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
 
         group_factors = [f for f in factors if f != test_factor]
 
-        # 1. 全局 ANOVA
+        # 1. 全局 ANOVA (仅用于输出 F 值表)
         factor_terms = [f'Q("{f}")' for f in factors]
         formula_rhs = " * ".join(factor_terms)
         formula = f"Q('{target}') ~ {formula_rhs}"
         
         model = ols(formula, data=current_df).fit()
-        
         global_mse = model.mse_resid
         global_df_resid = model.df_resid
         
@@ -163,9 +166,9 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                 'F_Sig': f_str
             })
         
-        # 2. 主效应
+        # 2. 主效应 (Main Effects)
         for factor in factors:
-            # groupby 会自动利用 Categorical 的顺序
+            # observed=True 确保 groupby 不生成空类别
             stats = current_df.groupby(factor, observed=True)[target].agg(['mean', 'std', 'count']).fillna(0)
             
             if mse_strategy == 'oneway':
@@ -198,11 +201,10 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                     'SD': stats.loc[lvl, 'std']
                 })
 
-        # 3. 组内比较
+        # 3. 组内比较 (Sliced Comparison) - 严格单因素
         if not group_factors:
             iter_groups = [( "All", current_df )] 
         else:
-            # groupby observed=True 确保不产生空的类别组合
             iter_groups = current_df.groupby(group_factors, observed=True)
 
         for group_keys, sub_df in iter_groups:
@@ -213,11 +215,14 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
                 for k, val in zip(group_factors, group_keys):
                     current_info[k] = str(val)
             
+            # 在子集中进行分析
             stats = sub_df.groupby(test_factor, observed=True)[target].agg(['mean', 'std', 'count']).fillna(0)
             
             if len(stats) < 2:
                 letters = {str(k).strip(): 'a' for k in stats.index}
             else:
+                # 🟢 严格单因素模型：仅使用当前切片的数据计算 MSE
+                # 只有当切片内无法计算模型时(极端情况)，才回退
                 try:
                     local_formula = f"Q('{target}') ~ C(Q('{test_factor}'))"
                     local_model = ols(local_formula, data=sub_df).fit()
@@ -250,7 +255,7 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
     return res
 
 # ==========================================
-# 3. 后端逻辑 (Cached + Adaptive)
+# 3. 后端逻辑 (Cached + Adaptive + Sorting Fix)
 # ==========================================
 
 @st.cache_data(show_spinner=False) 
@@ -258,16 +263,21 @@ def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
     """
     后端核心计算函数
     """
-    
-    # 【修复关键点】: 数据预处理
-    # 不仅仅是转成字符串，还要转成“有序类别”(Categorical)，以保持 Excel 原文顺序
+    # 1. 预处理：保持原始数据顺序
     work_df = df.copy()
+    
+    # 记录每个因子的原始顺序（用于后续恢复）
+    factor_orders = {}
+    
     for f in factors:
-        # 1. 先转字符串并去除首尾空格
+        # 转字符串并去空
         clean_col = work_df[f].astype(str).str.strip()
-        # 2. 提取原始顺序（pd.unique 会按出现顺序提取，保留原序）
-        original_order = clean_col.unique()
-        # 3. 强制转换为 Categorical 类型，并指定顺序
+        # 获取唯一值出现的顺序 (pd.unique 按照出现顺序排列)
+        original_order = pd.unique(clean_col)
+        # 存入字典
+        factor_orders[f] = original_order
+        # 转换为有序类别 (Ordered Categorical)
+        # 这一步非常关键！它告诉 pandas 这个列是有固定顺序的，不是字母序
         work_df[f] = pd.Categorical(clean_col, categories=original_order, ordered=True)
     
     num_tasks = len(valid_targets)
@@ -305,11 +315,12 @@ def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
 
     elapsed = time.time() - start_time
     
-    return results_list, errors, elapsed
+    # 将 factor_orders 传递出去，供合并时使用
+    return results_list, errors, elapsed, factor_orders
 
-def process_results_to_dfs(results_list, factors, test_factor, valid_targets, work_df):
+def process_results_to_dfs(results_list, factor_orders, factors, test_factor, valid_targets, work_df):
     """
-    将计算结果列表转换为 DataFrame
+    将计算结果列表转换为 DataFrame，并严格恢复顺序
     """
     all_anova = []
     all_main = []
@@ -326,7 +337,7 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
 
     final_res = {'errors': errors}
 
-    # 表格 1: ANOVA
+    # --- 表格 1: ANOVA ---
     if all_anova:
         final_res['anova_table'] = pd.DataFrame(all_anova).pivot_table(
             index='Source', columns='Trait', values='F_Sig', aggfunc='first'
@@ -334,54 +345,69 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
     else:
         final_res['anova_table'] = pd.DataFrame()
 
-    # 表格 2: Main Effects
+    # --- 表格 2: Main Effects (主效应) ---
     if all_main:
         me_df = pd.DataFrame(all_main)
-        # 确保 Factor 和 Level 遵循原始顺序（Categorical 排序）
-        # 这里需要注意 pivot_table 可能会丢失顺序，建议先保持 DataFrame
-        if not me_df.empty:
-             # 为了保证 pivot 后列的顺序，我们依赖 pivot_table 的默认行为（会按 index 排序）
-             # 这里的 index 是 Factor 和 Level，如果 Level 是字符串，它会字母排序。
-             # 但我们在 compute_all_stats 里已经把 work_df 的列变成了 Categorical，
-             # 可惜 me_df 是新生成的字符串。
-             # 补救措施：根据原始顺序重新排序 index
-             pass 
-
+        
+        # 核心修复：为 Level 列创建自定义排序键
+        # 因为 Level 列混合了不同因子的值，不能简单设为 Categorical
+        # 策略：创建一个辅助列 'SortKey'
+        
+        # 1. 构建全局排序映射: (FactorName, LevelValue) -> OrderIndex
+        sort_map = {}
+        idx_counter = 0
+        # 按照 factors 列表的顺序遍历
+        for f in factors:
+            if f in factor_orders:
+                for val in factor_orders[f]:
+                    sort_map[(f, val)] = idx_counter
+                    idx_counter += 1
+        
+        # 2. 生成排序键
+        me_df['SortKey'] = me_df.apply(lambda row: sort_map.get((row['Factor'], row['Level']), 9999), axis=1)
+        
+        # 3. 透视表 (保留 SortKey 用于排序)
         me_pivot = me_df.pivot_table(
-            index=['Factor', 'Level'], columns='Trait', values=['Mean_Letter'], aggfunc='first'
+            index=['SortKey', 'Factor', 'Level'], # 把 SortKey 放在最前面
+            columns='Trait', 
+            values=['Mean_Letter'], 
+            aggfunc='first'
         )
         
-        # 尝试恢复 Level 的原始顺序比较复杂，因为多个 Factor 混在一起。
-        # 但因为 work_df 是 Categorical，process_single_target 生成 rows 时是按顺序生成的。
-        # 如果 pivot_table 乱了，可以在这里加上 sort=False (pandas 1.x+) 或手动重排。
-        # 简单起见，Streamlit 的 DataFrame 渲染通常是可以接受的，
-        # 如果 pivot 导致乱序，通常是因为 pivot_table 对 index 进行了排序。
-        
-        # 为了让结果表好看，我们不强制在这里做复杂的 Categorical Index 恢复，
-        # 而是信任 process_single_target 的输出顺序，并尽量不通过 sort_index 打乱。
-        # 但 pivot_table 默认会 sort index。
-        # 如果需要严格顺序，这里需要做额外的处理。
-        # 鉴于代码复杂度，目前的 Categorical 处理能保证 process_single_target 内部计算是对的（比如 LSD 比较是对的），
-        # 最终表格的显示顺序受 pivot_table 影响。
+        # 4. 排序并清理索引
+        me_pivot = me_pivot.sort_index(level=0) # 按 SortKey 排序
+        me_pivot = me_pivot.droplevel(0) # 删除 SortKey 索引
         
         final_res['main_effects_table'] = me_pivot.swaplevel(0, 1, axis=1).sort_index(axis=1)
     else:
         final_res['main_effects_table'] = pd.DataFrame()
 
-    # 表格 3: Sliced
+    # --- 表格 3: Sliced Comparison (组内比较) ---
     if all_sliced:
         sc_df = pd.DataFrame(all_sliced)
         group_factors = [f for f in factors if f != test_factor]
         pivot_index = group_factors + [test_factor]
         
+        # 核心修复：将 DataFrame 中的因子列重新转换为 Ordered Categorical
+        # 这样 pivot_table 就会自动按这个顺序排，而不是字母序
+        for col in pivot_index:
+            if col in factor_orders and col in sc_df.columns:
+                sc_df[col] = pd.Categorical(
+                    sc_df[col], 
+                    categories=factor_orders[col], 
+                    ordered=True
+                )
+        
         # 分列数据
+        # sort=True 是 pivot_table 的默认值，它会按 Index 的顺序排序
+        # 因为 Index 已经是 Ordered Categorical，所以会按我们想要的顺序排
         sc_pivot_sep = sc_df.pivot_table(
-            index=pivot_index, columns='Trait', values=['Mean', 'Letter', 'SD'], aggfunc='first', sort=False 
+            index=pivot_index, columns='Trait', values=['Mean', 'Letter', 'SD'], aggfunc='first'
         )
-        # sort=False 在 pivot_table 中非常关键，能保留数据出现的顺序！
         
         sc_pivot_sep = sc_pivot_sep.swaplevel(0, 1, axis=1).sort_index(axis=1, level=0)
         
+        # 调整列顺序
         sorted_traits = sc_pivot_sep.columns.get_level_values(0).unique()
         new_columns = []
         for t in sorted_traits:
@@ -392,14 +418,14 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
         
         # 组合数据
         sc_pivot_comb = sc_df.pivot_table(
-            index=pivot_index, columns='Trait', values=['Mean_Letter'], aggfunc='first', sort=False
+            index=pivot_index, columns='Trait', values=['Mean_Letter'], aggfunc='first'
         )
         final_res['sliced_table_comb'] = sc_pivot_comb.swaplevel(0, 1, axis=1).sort_index(axis=1)
     else:
         final_res['sliced_table_sep'] = pd.DataFrame()
         final_res['sliced_table_comb'] = pd.DataFrame()
 
-    # 表格 4: Correlation
+    # --- 表格 4: Correlation ---
     if len(valid_targets) > 1:
         num_df = work_df[valid_targets].apply(pd.to_numeric, errors='coerce')
         corr_df = num_df.corr() 
@@ -427,8 +453,8 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
 # 4. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
-st.title("⚡分析 (Pro)")
+st.set_page_config(page_title="极速数据分析", layout="wide", page_icon="⚡")
+st.title("⚡ 极速统计分析 (Pro)")
 
 if 'run_analysis' not in st.session_state:
     st.session_state.run_analysis = False
@@ -534,7 +560,7 @@ else:
 
         with st.spinner(f"正在分析 {len(valid_targets)} 个指标..."):
             # 传递 df 的副本
-            raw_results, exec_errors, elapsed_time = compute_all_stats(
+            raw_results, exec_errors, elapsed_time, factor_orders = compute_all_stats(
                 df, factors, valid_targets, test_factor, mse_strategy
             )
 
@@ -543,7 +569,7 @@ else:
                 for err in exec_errors:
                     st.warning(err)
 
-        final_res = process_results_to_dfs(raw_results, factors, test_factor, valid_targets, df)
+        final_res = process_results_to_dfs(raw_results, factor_orders, factors, test_factor, valid_targets, df)
         
         st.success(f"✅ 分析完成！耗时: {elapsed_time:.2f} 秒 (已缓存)")
 
@@ -599,4 +625,3 @@ else:
             file_name=f"Analysis_Result.xlsx",
             mime="application/vnd.ms-excel"
         )
-
