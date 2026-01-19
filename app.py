@@ -11,24 +11,21 @@ import os
 import time
 
 # ==========================================
-# 0. UI 美化工具 (新增部分)
+# 0. UI 美化工具
 # ==========================================
 
 def styled_tag(text, icon=""):
-    """
-    渲染一个胶囊形状的标题
-    """
     st.markdown(f"""
     <div style="
         display: inline-flex;
         align-items: center;
-        background-color: #e3f2fd; /* 淡蓝色背景 */
-        color: #1565c0; /* 深蓝色文字 */
+        background-color: #e3f2fd;
+        color: #1565c0;
         padding: 6px 16px;
-        border-radius: 20px; /* 圆角胶囊形状 */
+        border-radius: 20px;
         font-weight: 600;
         font-size: 15px;
-        margin-bottom: 15px;
+        margin-bottom: 10px;
         margin-top: 5px;
         border: 1px solid #bbdefb;
         box-shadow: 0 1px 2px rgba(0,0,0,0.05);
@@ -356,26 +353,23 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     return results
 
 # ==========================================
-# 3. Streamlit 界面 (胶囊样式版)
+# 3. Streamlit 界面 (全屏交互优化版)
 # ==========================================
 
 st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
-st.title("数据分析")
+st.title("🌾 水稻科研数据分析")
 
-# 侧边栏
+# 🟢 全局变量初始化
+df = None
+factors = []
+targets = []
+test_factor = None
+mse_strategy = 'oneway'
+
+# --- 侧边栏：只保留上传和全局配置 ---
 with st.sidebar:
-    # 🟢 使用 styled_tag 替代原本的 st.header("1. 数据上传")
-    styled_tag("数据上传", icon="📂")
-    
+    styled_tag("第一步：上传数据", icon="📂")
     uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'])
-    
-    # 🟢 使用 styled_tag 替代 st.header("2. 因子选择")
-    styled_tag("因子选择", icon="🧬")
-    
-    factors = []
-    targets = []
-    test_factor = None
-    mse_strategy = 'oneway' 
     
     if uploaded_file:
         try:
@@ -392,132 +386,163 @@ with st.sidebar:
                     df = excel_file.parse(0)
             
             df.columns = df.columns.astype(str)
-            all_cols = df.columns.tolist()
             
+            # 模型设置放侧边栏底部
             st.markdown("---")
-            factors = st.multiselect("因子 (X)", all_cols)
-            
-            if factors:
-                default_idx = len(factors) - 1
-                test_factor = st.selectbox("比较因子 (用于组内比较)", factors, index=default_idx)
-            
-            targets = st.multiselect("指标 (Y)", all_cols)
-            
-            st.markdown("---")
-            with st.expander("⚙️ 模型设置 (默认单因素)", expanded=False):
+            with st.expander("⚙️ 高级设置", expanded=False):
                 strategy_label = st.radio(
                     "误差计算方式",
                     ('多因素模型误差(GLM)', '单因素模型误差'),
                     index=1,
-                    help="多因素：剥离其他因子干扰，MSE小。\n单因素：完全基于原始数据波动，MSE大。"
                 )
                 mse_strategy = 'full' if '多因素' in strategy_label else 'oneway'
             
         except Exception as e:
             st.error(f"读取错误: {e}")
 
-# 主界面区域
-with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
-    col1, col2 = st.columns([0.45, 0.55]) 
-    with col1:
-        st.markdown("### 📋 数据准备示例")
-        demo_data = pd.DataFrame({
-           '品种': ['V1', 'V1', 'V1', 'V2'],
-            '处理': ['CK', 'CK', 'CK', 'CK'],
-            '重复': ['R1', 'R2', 'R3', 'R1'],
-            '产量(kg)': [500.2, 520.5, 480.1, 600.5],
-            '株高(cm)': [100.5, 105.2, 98.4, 110.2]
-        })
-        st.dataframe(demo_data, hide_index=True, use_container_width=True)
-    with col2:
-        st.markdown("""
-        ### 🛠️ 操作提示
-        1. **左侧上传数据**，选择对应的因子和指标。
-        2. **下方点击“启动分析”**。
-        3. 结果生成后可下载 Excel。
-        """)
+# --- 主界面：逻辑处理区域 ---
 
-if uploaded_file and factors and targets and test_factor:
-    st.markdown("###") 
+# 1. 默认状态：显示使用说明
+if not uploaded_file:
+    with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
+        col1, col2 = st.columns([0.45, 0.55]) 
+        with col1:
+            st.markdown("### 📋 数据准备示例")
+            demo_data = pd.DataFrame({
+               '品种': ['V1', 'V1', 'V2', 'V2'],
+                '处理': ['CK', 'TR', 'CK', 'TR'],
+                '产量': [500.2, 520.5, 600.5, 620.1],
+            })
+            st.dataframe(demo_data, hide_index=True, use_container_width=True)
+        with col2:
+            st.markdown("""
+            ### 🛠️ 操作提示
+            1. **左侧上传数据**。
+            2. **在主界面直接选择**因子和指标（支持全选）。
+            3. **点击启动分析**。
+            """)
+    st.info("👈 请在左侧侧边栏上传数据文件开始")
+
+# 2. 数据上传后：显示配置面板
+if df is not None:
+    all_cols = df.columns.tolist()
     
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
+    # 🟢 数据预览区
+    with st.expander("👀 数据预览 (前5行)", expanded=False):
+        st.dataframe(df.head(), use_container_width=True)
 
-    if run_btn:
-        st.divider()
-        res = run_parallel_analysis(df, factors, targets, test_factor, mse_strategy)
+    # 🟢 变量选择区 (核心优化点)
+    styled_tag("第二步：变量配置", icon="🧬")
+    
+    # 使用两列布局，左边选X，右边选Y
+    col_x, col_y = st.columns([1, 1])
+    
+    with col_x:
+        st.info("**请选择实验因子 (X)** \n\n (例如：品种、处理、施氮量)")
+        factors = st.multiselect("点击下拉或直接输入搜索", all_cols, key="factors_select")
+        
+        # 当选择了因子后，才显示比较因子的选择框
+        if factors:
+            default_idx = len(factors) - 1
+            test_factor = st.selectbox("📌 选择主要比较因子 (用于标记字母)", factors, index=default_idx)
+
+    with col_y:
+        st.success("**请选择分析指标 (Y)** \n\n (例如：产量、株高、叶绿素)")
+        
+        # 🟢 智能筛选数值列
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        
+        # 🟢 一键全选功能
+        use_all_numeric = st.checkbox("✅ 一键选中所有数值型列", value=False)
+        
+        if use_all_numeric:
+            targets = numeric_cols
+            st.write(f"已自动选择 {len(targets)} 个指标: {', '.join(targets[:5])}...")
+        else:
+            targets = st.multiselect("点击下拉或直接输入搜索", all_cols, default=[], key="targets_select")
+
+    # 🟢 启动按钮区
+    if factors and targets and test_factor:
+        st.markdown("###")
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            run_btn = st.button("🚀 立即启动并行分析", type="primary", use_container_width=True)
             
-        if res.get('errors'):
-            with st.expander("⚠️ 部分指标分析失败", expanded=False):
-                for err in res['errors']:
-                    st.warning(err)
-        
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📈 组内 (分列)", 
-            "📑 组内 (组合)", 
-            "🏆 主效应", 
-            "🧮 ANOVA", 
-            "🔗 相关性"
-        ])
-        
-        with tab1:
-            st.subheader(f"1. 组内比较 - 分列数据")
-            if not res['sliced_table_sep'].empty:
-                st.dataframe(res['sliced_table_sep'], width='stretch')
-            else:
-                st.warning("无数据")
-
-        with tab2:
-            st.subheader(f"2. 组内比较 - 组合标签")
-            if not res['sliced_table_comb'].empty:
-                st.dataframe(res['sliced_table_comb'], width='stretch')
-            else:
-                st.warning("无数据")
-
-        with tab3:
-            title_suffix = "(基于单因素误差)" if mse_strategy == 'oneway' else "(基于全模型误差)"
-            st.subheader(f"3. 主效应比较 {title_suffix}")
-            if not res['main_effects_table'].empty:
-                st.dataframe(res['main_effects_table'], width='stretch')
-            else:
-                st.warning("无数据")
-
-        with tab4:
-            st.subheader("4. 方差分析 (F-value)")
-            if not res['anova_table'].empty:
-                st.dataframe(res['anova_table'], width='stretch')
-            else:
-                st.warning("无数据")
-
-        with tab5:
-            st.subheader("5. 相关性矩阵")
-            if not res['correlation'].empty:
-                st.dataframe(res['correlation'], width='stretch')
-            else:
-                st.info("数据不足以计算相关性")
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer) as writer:
-            if not res['sliced_table_sep'].empty: 
-                res['sliced_table_sep'].to_excel(writer, sheet_name='组内_分列数据')
-            if not res['sliced_table_comb'].empty: 
-                res['sliced_table_comb'].to_excel(writer, sheet_name='组内_组合标签')
-            if not res['main_effects_table'].empty: 
-                res['main_effects_table'].to_excel(writer, sheet_name='主效应_大写')
-            if not res['anova_table'].empty: 
-                res['anova_table'].to_excel(writer, sheet_name='ANOVA')
-            if not res['correlation'].empty: 
-                res['correlation'].to_excel(writer, sheet_name='相关分析')
+        if run_btn:
+            st.divider()
+            with st.spinner('正在疯狂计算中，请稍候...'):
+                res = run_parallel_analysis(df, factors, targets, test_factor, mse_strategy)
             
-        st.download_button(
-            "📥 下载完整结果 (Excel)",
-            data=buffer.getvalue(),
-            file_name=f"Analysis_{mse_strategy}.xlsx",
-            mime="application/vnd.ms-excel"
-        )
-elif uploaded_file:
-    st.info("👈 请在左侧侧边栏选择【因子】和【指标】以激活分析按钮")
-else:
-    st.info("👈 请在左侧上传数据文件")
+            # 结果展示保持不变
+            if res.get('errors'):
+                with st.expander("⚠️ 部分指标分析失败", expanded=False):
+                    for err in res['errors']:
+                        st.warning(err)
+            
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "📈 组内 (分列)", 
+                "📑 组内 (组合)", 
+                "🏆 主效应", 
+                "🧮 ANOVA", 
+                "🔗 相关性"
+            ])
+            
+            with tab1:
+                st.subheader(f"1. 组内比较 - 分列数据")
+                if not res['sliced_table_sep'].empty:
+                    st.dataframe(res['sliced_table_sep'], use_container_width=True)
+                else:
+                    st.warning("无数据")
 
+            with tab2:
+                st.subheader(f"2. 组内比较 - 组合标签")
+                if not res['sliced_table_comb'].empty:
+                    st.dataframe(res['sliced_table_comb'], use_container_width=True)
+                else:
+                    st.warning("无数据")
+
+            with tab3:
+                title_suffix = "(基于单因素误差)" if mse_strategy == 'oneway' else "(基于全模型误差)"
+                st.subheader(f"3. 主效应比较 {title_suffix}")
+                if not res['main_effects_table'].empty:
+                    st.dataframe(res['main_effects_table'], use_container_width=True)
+                else:
+                    st.warning("无数据")
+
+            with tab4:
+                st.subheader("4. 方差分析 (F-value)")
+                if not res['anova_table'].empty:
+                    st.dataframe(res['anova_table'], use_container_width=True)
+                else:
+                    st.warning("无数据")
+
+            with tab5:
+                st.subheader("5. 相关性矩阵")
+                if not res['correlation'].empty:
+                    st.dataframe(res['correlation'], use_container_width=True)
+                else:
+                    st.info("数据不足以计算相关性")
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer) as writer:
+                if not res['sliced_table_sep'].empty: 
+                    res['sliced_table_sep'].to_excel(writer, sheet_name='组内_分列数据')
+                if not res['sliced_table_comb'].empty: 
+                    res['sliced_table_comb'].to_excel(writer, sheet_name='组内_组合标签')
+                if not res['main_effects_table'].empty: 
+                    res['main_effects_table'].to_excel(writer, sheet_name='主效应_大写')
+                if not res['anova_table'].empty: 
+                    res['anova_table'].to_excel(writer, sheet_name='ANOVA')
+                if not res['correlation'].empty: 
+                    res['correlation'].to_excel(writer, sheet_name='相关分析')
+                
+            st.download_button(
+                "📥 下载完整结果 (Excel)",
+                data=buffer.getvalue(),
+                file_name=f"Analysis_{mse_strategy}.xlsx",
+                mime="application/vnd.ms-excel",
+                use_container_width=True
+            )
+    else:
+        st.markdown("###")
+        st.warning("👆 请在上方先选择至少一个【实验因子】和一个【分析指标】")
