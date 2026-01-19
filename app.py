@@ -19,18 +19,17 @@ def styled_tag(text, icon=""):
     <div style="
         display: inline-flex;
         align-items: center;
-        background-color: #e3f2fd;
-        color: #1565c0;
-        padding: 6px 16px;
-        border-radius: 20px;
+        background-color: #f0f2f6; 
+        color: #31333F; 
+        padding: 4px 12px;
+        border-radius: 4px;
         font-weight: 600;
-        font-size: 15px;
-        margin-bottom: 10px;
+        font-size: 14px;
+        margin-bottom: 8px;
         margin-top: 5px;
-        border: 1px solid #bbdefb;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        border: 1px solid #d6d6d8;
     ">
-        <span style="margin-right: 8px; font-size: 18px;">{icon}</span>
+        <span style="margin-right: 6px; font-size: 16px;">{icon}</span>
         {text}
     </div>
     """, unsafe_allow_html=True)
@@ -353,22 +352,28 @@ def run_parallel_analysis(df, factors, targets, test_factor, mse_strategy):
     return results
 
 # ==========================================
-# 3. Streamlit 界面 (全屏交互优化版)
+# 3. Streamlit 界面 (SPSS风格交互版)
 # ==========================================
 
 st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
 st.title("🌾 水稻科研数据分析")
 
-# 🟢 全局变量初始化
+# 初始化 session state 用于存储选择
+if 'selected_factors' not in st.session_state:
+    st.session_state['selected_factors'] = []
+if 'selected_targets' not in st.session_state:
+    st.session_state['selected_targets'] = []
+
+# 全局变量
 df = None
 factors = []
 targets = []
 test_factor = None
 mse_strategy = 'oneway'
 
-# --- 侧边栏：只保留上传和全局配置 ---
+# --- 侧边栏：文件上传 ---
 with st.sidebar:
-    styled_tag("第一步：上传数据", icon="📂")
+    styled_tag("步骤1：上传数据", icon="📂")
     uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'])
     
     if uploaded_file:
@@ -387,7 +392,6 @@ with st.sidebar:
             
             df.columns = df.columns.astype(str)
             
-            # 模型设置放侧边栏底部
             st.markdown("---")
             with st.expander("⚙️ 高级设置", expanded=False):
                 strategy_label = st.radio(
@@ -400,10 +404,10 @@ with st.sidebar:
         except Exception as e:
             st.error(f"读取错误: {e}")
 
-# --- 主界面：逻辑处理区域 ---
+# --- 主界面逻辑 ---
 
-# 1. 默认状态：显示使用说明
 if not uploaded_file:
+    # 默认显示说明
     with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
         col1, col2 = st.columns([0.45, 0.55]) 
         with col1:
@@ -418,50 +422,88 @@ if not uploaded_file:
             st.markdown("""
             ### 🛠️ 操作提示
             1. **左侧上传数据**。
-            2. **在主界面直接选择**因子和指标（支持全选）。
+            2. **在主界面配置变量**：左侧是变量池，右侧是选框。
             3. **点击启动分析**。
             """)
     st.info("👈 请在左侧侧边栏上传数据文件开始")
 
-# 2. 数据上传后：显示配置面板
 if df is not None:
     all_cols = df.columns.tolist()
     
-    # 🟢 数据预览区
-    with st.expander("👀 数据预览 (前5行)", expanded=False):
-        st.dataframe(df.head(), use_container_width=True)
+    styled_tag("步骤2：变量配置 (SPSS模式)", icon="🧬")
 
-    # 🟢 变量选择区 (核心优化点)
-    styled_tag("第二步：变量配置", icon="🧬")
+    # 🟢 布局核心：1/3 显示变量池，2/3 显示配置框
+    col_pool, col_selection = st.columns([1, 2])
     
-    # 使用两列布局，左边选X，右边选Y
-    col_x, col_y = st.columns([1, 1])
-    
-    with col_x:
-        st.info("**请选择实验因子 (X)** \n\n (例如：品种、处理、施氮量)")
-        factors = st.multiselect("点击下拉或直接输入搜索", all_cols, key="factors_select")
+    # ------------------------------------------------
+    # 左侧：变量池 (模拟 SPSS 左侧列表)
+    # ------------------------------------------------
+    with col_pool:
+        st.markdown("**🎲 待选变量池**")
+        # 计算还没被选中的变量
+        current_x = st.session_state['selected_factors']
+        current_y = st.session_state['selected_targets']
+        unused_cols = [c for c in all_cols if c not in current_x and c not in current_y]
         
-        # 当选择了因子后，才显示比较因子的选择框
+        # 使用 DataFrame 展示，看起来像个列表
+        if unused_cols:
+            st.dataframe(pd.DataFrame(unused_cols, columns=["变量名"]), 
+                         hide_index=True, use_container_width=True, height=400)
+        else:
+            st.info("所有变量已分配完毕")
+
+    # ------------------------------------------------
+    # 右侧：X框 和 Y框
+    # ------------------------------------------------
+    with col_selection:
+        # --- 框1：实验因子 (X) ---
+        st.markdown("**📌 实验因子 (X)** (定类变量，如品种、处理)")
+        
+        # 🟢 动态计算 X 的可选范围：全部列 - 已经在 Y 中的列
+        options_for_x = [c for c in all_cols if c not in st.session_state['selected_targets']]
+        
+        factors = st.multiselect(
+            "选择因子 (已选的将从Y中剔除)", 
+            options=options_for_x,
+            key='selected_factors',
+            placeholder="请选择分组变量..."
+        )
+        
+        # 比较因子选择
         if factors:
             default_idx = len(factors) - 1
-            test_factor = st.selectbox("📌 选择主要比较因子 (用于标记字母)", factors, index=default_idx)
-
-    with col_y:
-        st.success("**请选择分析指标 (Y)** \n\n (例如：产量、株高、叶绿素)")
-        
-        # 🟢 智能筛选数值列
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        # 🟢 一键全选功能
-        use_all_numeric = st.checkbox("✅ 一键选中所有数值型列", value=False)
-        
-        if use_all_numeric:
-            targets = numeric_cols
-            st.write(f"已自动选择 {len(targets)} 个指标: {', '.join(targets[:5])}...")
+            test_factor = st.selectbox("🏷️ 选择主要比较因子 (用于标记字母)", factors, index=default_idx)
         else:
-            targets = st.multiselect("点击下拉或直接输入搜索", all_cols, default=[], key="targets_select")
+            test_factor = None
+            
+        st.markdown("---")
+        
+        # --- 框2：分析指标 (Y) ---
+        c_label, c_btn = st.columns([1, 1])
+        with c_label:
+            st.markdown("**📈 分析指标 (Y)** (定量变量)")
+        with c_btn:
+            # 🟢 一键智能全选按钮
+            if st.button("⬇️ 将剩余数值变量全部加入 Y", use_container_width=True):
+                # 逻辑：找出所有是数字的，且没在 X 中的列
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                candidates = [c for c in numeric_cols if c not in factors]
+                st.session_state['selected_targets'] = candidates
+                st.rerun() # 强制刷新页面以更新多选框显示
 
-    # 🟢 启动按钮区
+        # 🟢 动态计算 Y 的可选范围：全部列 - 已经在 X 中的列
+        options_for_y = [c for c in all_cols if c not in st.session_state['selected_factors']]
+        
+        targets = st.multiselect(
+            "选择指标 (已选的将从X中剔除)", 
+            options=options_for_y,
+            key='selected_targets',
+            placeholder="请选择要分析的数据..."
+        )
+
+    # ------------------------------------------------
+    # 底部：启动按钮
+    # ------------------------------------------------
     if factors and targets and test_factor:
         st.markdown("###")
         c1, c2, c3 = st.columns([1, 2, 1])
@@ -470,21 +512,16 @@ if df is not None:
             
         if run_btn:
             st.divider()
-            with st.spinner('正在疯狂计算中，请稍候...'):
+            with st.spinner('正在疯狂计算中...'):
                 res = run_parallel_analysis(df, factors, targets, test_factor, mse_strategy)
             
-            # 结果展示保持不变
             if res.get('errors'):
                 with st.expander("⚠️ 部分指标分析失败", expanded=False):
                     for err in res['errors']:
                         st.warning(err)
             
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📈 组内 (分列)", 
-                "📑 组内 (组合)", 
-                "🏆 主效应", 
-                "🧮 ANOVA", 
-                "🔗 相关性"
+                "📈 组内 (分列)", "📑 组内 (组合)", "🏆 主效应", "🧮 ANOVA", "🔗 相关性"
             ])
             
             with tab1:
@@ -543,6 +580,3 @@ if df is not None:
                 mime="application/vnd.ms-excel",
                 use_container_width=True
             )
-    else:
-        st.markdown("###")
-        st.warning("👆 请在上方先选择至少一个【实验因子】和一个【分析指标】")
