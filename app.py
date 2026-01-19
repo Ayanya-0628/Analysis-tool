@@ -9,11 +9,18 @@ import io
 import concurrent.futures
 import os
 import time
-# 注意：在 Streamlit 中使用 multiprocessing 必须小心，但在函数式结构下通常没问题
 
 # ==========================================
-# 0. UI 美化工具
+# 0. UI 美化工具 & 状态管理
 # ==========================================
+
+# 必须放在页面配置之后，但为了逻辑清晰，回调函数放这里
+def reset_analysis():
+    """
+    当用户修改任何参数时，调用此函数重置分析状态。
+    强制用户必须再次点击“启动分析”按钮。
+    """
+    st.session_state.run_analysis = False
 
 def styled_tag(text, icon=""):
     st.markdown(f"""
@@ -395,13 +402,18 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
 # 4. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="极速数据分析", layout="wide", page_icon="⚡")
 st.title("⚡ 极速统计分析 (Pro)")
+
+# 初始化 Session State
+if 'run_analysis' not in st.session_state:
+    st.session_state.run_analysis = False
 
 # 侧边栏
 with st.sidebar:
     styled_tag("数据上传", icon="📂")
-    uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'])
+    # ✅ 添加 on_change=reset_analysis，确保新文件上传时重置分析状态
+    uploaded_file = st.file_uploader("选择 Excel/CSV 文件", type=['xlsx', 'csv'], on_change=reset_analysis)
     
     styled_tag("因子选择", icon="🧬")
     
@@ -421,7 +433,8 @@ with st.sidebar:
                 sheet_names = excel_file.sheet_names
                 if len(sheet_names) > 1:
                     st.success(f"📂 包含 {len(sheet_names)} 个Sheet")
-                    selected_sheet = st.selectbox("选择工作表:", sheet_names)
+                    # ✅ 添加 on_change
+                    selected_sheet = st.selectbox("选择工作表:", sheet_names, on_change=reset_analysis)
                     df = excel_file.parse(selected_sheet)
                 else:
                     df = excel_file.parse(0)
@@ -430,20 +443,25 @@ with st.sidebar:
             all_cols = df.columns.tolist()
             
             st.markdown("---")
-            factors = st.multiselect("因子 (X)", all_cols)
+            # ✅ 添加 on_change
+            factors = st.multiselect("因子 (X)", all_cols, on_change=reset_analysis)
             
             if factors:
                 default_idx = len(factors) - 1
-                test_factor = st.selectbox("比较因子 (用于组内比较)", factors, index=default_idx)
+                # ✅ 添加 on_change
+                test_factor = st.selectbox("比较因子 (用于组内比较)", factors, index=default_idx, on_change=reset_analysis)
             
-            targets = st.multiselect("指标 (Y)", all_cols)
+            # ✅ 添加 on_change
+            targets = st.multiselect("指标 (Y)", all_cols, on_change=reset_analysis)
             
             st.markdown("---")
             with st.expander("⚙️ 模型设置 (默认单因素)", expanded=False):
+                # ✅ 添加 on_change
                 strategy_label = st.radio(
                     "误差计算方式 (主效应)",
                     ('多因素模型误差(GLM)', '单因素模型误差'),
-                    index=1
+                    index=1,
+                    on_change=reset_analysis
                 )
                 mse_strategy = 'full' if '多因素' in strategy_label else 'oneway'
             
@@ -480,9 +498,6 @@ else:
     st.markdown("###") 
     c1, c2, c3 = st.columns([1, 2, 1])
     
-    if 'run_analysis' not in st.session_state:
-        st.session_state.run_analysis = False
-
     with c2:
         if st.button("🚀 启动分析", type="primary", use_container_width=True):
             st.session_state.run_analysis = True
@@ -566,4 +581,3 @@ else:
             file_name=f"Analysis_Result.xlsx",
             mime="application/vnd.ms-excel"
         )
-
