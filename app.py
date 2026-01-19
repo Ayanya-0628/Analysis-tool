@@ -9,7 +9,7 @@ import io
 import concurrent.futures
 import os
 import time
-import multiprocessing
+# 注意：在 Streamlit 中使用 multiprocessing 必须小心，但在函数式结构下通常没问题
 
 # ==========================================
 # 0. UI 美化工具
@@ -37,7 +37,7 @@ def styled_tag(text, icon=""):
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. 核心统计工具 (保持不变)
+# 1. 核心统计工具
 # ==========================================
 
 def get_stars(p_value):
@@ -112,12 +112,12 @@ def solve_clique_cld(means, pairwise_data, use_uppercase=False):
     return final_res
 
 # ==========================================
-# 2. Worker 函数 (必须定义在顶层，方便多进程调用)
+# 2. Worker 函数 (核心计算逻辑)
 # ==========================================
 
 def process_single_target(target, df_data, factors, test_factor, mse_strategy):
     """
-    单个指标的计算逻辑，将被多进程调用。
+    单个指标的计算逻辑，将被多进程或直接调用。
     """
     res = {
         'anova_rows': [],
@@ -242,14 +242,13 @@ def process_single_target(target, df_data, factors, test_factor, mse_strategy):
     return res
 
 # ==========================================
-# 3. 后端逻辑 (Cached + Multiprocessing)
+# 3. 后端逻辑 (Cached + Adaptive)
 # ==========================================
 
-# 使用 @st.cache_data 缓存计算结果，避免刷新 UI 时重新跑计算
 @st.cache_data(show_spinner=False) 
 def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
     """
-    后端核心计算函数：负责调度进程池或线程池。
+    后端核心计算函数：根据任务量自适应选择串行或多进程并行。
     """
     
     # 准备工作
@@ -257,18 +256,15 @@ def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
     for f in factors:
         work_df[f] = work_df[f].astype(str).str.strip()
     
-    # 1. 策略选择：根据数据量决定并发模型
-    # 统计模型计算非常耗 CPU，多进程(Process)能绕过 GIL，但启动有开销。
-    # 阈值：如果任务少于 5 个，直接串行反而更快。
     num_tasks = len(valid_targets)
-    use_multiprocessing = num_tasks > 5
     
-    # 确定核心数，保留 1-2 个核心给系统和 UI
+    # 【核心优化】
+    # 任务数 < 5: 串行计算。避免进程启动开销（约0.5-1秒），让单指标瞬间出结果。
+    # 任务数 >= 5: 多进程计算。利用多核 CPU 加速大量计算。
+    use_multiprocessing = num_tasks >= 5
+    
     max_cpu = os.cpu_count() or 4
-    if max_cpu > 4:
-        workers = max_cpu - 1
-    else:
-        workers = max_cpu
+    workers = max(1, max_cpu - 1)
 
     results_list = []
     errors = []
@@ -276,21 +272,15 @@ def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
     # 准备任务参数列表
     tasks = []
     for t in valid_targets:
-        # 只传递必要的列，减少进程间通信开销 (Pickle overhead)
         subset_df = work_df[[t] + factors]
         tasks.append((t, subset_df, factors, test_factor, mse_strategy))
 
     start_time = time.time()
     
     if use_multiprocessing:
-        # 🚀 多进程模式 (ProcessPoolExecutor) - 真正并行
-        # 注意：在 Streamlit 中，ProcessPoolExecutor 必须小心使用，确保函数在顶层
+        # 🚀 大量任务：多进程并行
         with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-            # 提交所有任务
             futures = [executor.submit(process_single_target, *task) for task in tasks]
-            # 获取结果 (as_completed 允许我们监控进度，但为了缓存方便，这里直接 map 也可以)
-            # 为了能在外部更新进度条，我们需要 yield 或者返回 futures，但在 cache 函数里这很复杂
-            # 这里我们为了速度，直接等待所有结果
             for future in concurrent.futures.as_completed(futures):
                 try:
                     res = future.result()
@@ -298,11 +288,13 @@ def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
                 except Exception as e:
                     errors.append(f"System Error: {e}")
     else:
-        # 🐢 少量任务直接串行/线程池 (开销小)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(process_single_target, *task) for task in tasks]
-            for future in concurrent.futures.as_completed(futures):
-                 results_list.append(future.result())
+        # 🐢 少量任务：直接串行 (速度最快，无启动延迟)
+        for task in tasks:
+            try:
+                res = process_single_target(*task)
+                results_list.append(res)
+            except Exception as e:
+                errors.append(f"Calculation Error: {e}")
 
     elapsed = time.time() - start_time
     
@@ -310,7 +302,7 @@ def compute_all_stats(df, factors, valid_targets, test_factor, mse_strategy):
 
 def process_results_to_dfs(results_list, factors, test_factor, valid_targets, work_df):
     """
-    将计算结果列表转换为 DataFrame，速度极快，无需并行。
+    将计算结果列表转换为 DataFrame
     """
     all_anova = []
     all_main = []
@@ -375,9 +367,8 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
         final_res['sliced_table_sep'] = pd.DataFrame()
         final_res['sliced_table_comb'] = pd.DataFrame()
 
-    # 表格 4: Correlation (NumPy 计算极快，直接在这里做)
+    # 表格 4: Correlation
     if len(valid_targets) > 1:
-        # 确保类型正确
         num_df = work_df[valid_targets].apply(pd.to_numeric, errors='coerce')
         corr_df = num_df.corr() 
         pval_df = num_df.corr(method=lambda x, y: pearsonr(x, y)[1]) 
@@ -461,34 +452,46 @@ with st.sidebar:
 
 # 主界面区域
 if not (uploaded_file and factors and targets and test_factor):
-    with st.expander("ℹ️ 使用说明(点击展开)", expanded=True):
-        st.markdown("""
-        ### 🚀 优化说明
-        此版本启用了**多进程并行计算**和**智能缓存**：
-        1. **不卡顿**：计算逻辑与界面分离，避免进度条频繁刷新导致的卡死。
-        2. **更快速**：针对 CPU 密集型任务，自动切换为多核并行处理（绕过 GIL 锁）。
-        3. **秒切换**：分析完成后，切换 Tab 或修改展示选项时**无需重新计算**。
-        """)
+    with st.expander("ℹ️ 使用说明 (点击展开)", expanded=True):
+        col1, col2 = st.columns([0.45, 0.55]) 
+        with col1:
+            st.markdown("### 📋 数据准备示例")
+            demo_data = pd.DataFrame({
+               '品种': ['V1', 'V1', 'V1', 'V2'],
+                '处理': ['CK', 'CK', 'CK', 'CK'],
+                '重复': ['R1', 'R2', 'R3', 'R1'],
+                '产量(kg)': [500.2, 520.5, 480.1, 600.5],
+                '株高(cm)': [100.5, 105.2, 98.4, 110.2]
+            })
+            st.dataframe(demo_data, hide_index=True, use_container_width=True)
+        with col2:
+            st.markdown("""
+            ### 🛠️ 操作提示
+            1. **左侧上传数据**，选择对应的因子和指标。
+            2. **下方点击“启动分析”**。
+            3. 结果生成后可下载 Excel。
+            
+            ### 🚀 性能说明
+            - **少量指标 (<5个)**：采用串行极速模式，无启动延迟。
+            - **大量指标 (>=5个)**：自动开启多进程并行加速。
+            """)
         st.info("👈 请在左侧上传数据并配置参数")
 else:
     st.markdown("###") 
     c1, c2, c3 = st.columns([1, 2, 1])
     
-    # 使用 Session State 来记录按钮点击状态，防止页面刷新丢失
     if 'run_analysis' not in st.session_state:
         st.session_state.run_analysis = False
 
     with c2:
-        if st.button("🚀 启动并行分析", type="primary", use_container_width=True):
+        if st.button("🚀 启动分析", type="primary", use_container_width=True):
             st.session_state.run_analysis = True
 
     if st.session_state.run_analysis:
         st.divider()
         
-        # 1. 预处理数据 (轻量)
         valid_targets = []
         for t_col in targets:
-            # 简单检查，不涉及重计算
             if pd.to_numeric(df[t_col], errors='coerce').notna().sum() > 0:
                 valid_targets.append(t_col)
         
@@ -496,10 +499,8 @@ else:
             st.error("所选指标均为空或非数值！")
             st.stop()
 
-        # 2. 调用核心计算 (带缓存 + 多进程)
-        with st.spinner(f"正在全速计算 {len(valid_targets)} 个指标，请稍候..."):
-            # 传递 df 的副本以防修改
-            # 注意：Streamlit 缓存是基于参数哈希的，所以参数没变就不会重跑
+        with st.spinner(f"正在分析 {len(valid_targets)} 个指标..."):
+            # 传递 df 的副本
             raw_results, exec_errors, elapsed_time = compute_all_stats(
                 df, factors, valid_targets, test_factor, mse_strategy
             )
@@ -509,12 +510,10 @@ else:
                 for err in exec_errors:
                     st.warning(err)
 
-        # 3. 整理结果 (极快)
         final_res = process_results_to_dfs(raw_results, factors, test_factor, valid_targets, df)
         
         st.success(f"✅ 分析完成！耗时: {elapsed_time:.2f} 秒 (已缓存)")
 
-        # 4. 展示 Tab
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📈 组内 (分列)", 
             "📑 组内 (组合)", 
@@ -548,7 +547,6 @@ else:
                 st.dataframe(final_res['correlation'], use_container_width=True)
             else: st.info("无相关性数据")
         
-        # 5. 下载逻辑
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer) as writer:
             if not final_res['sliced_table_sep'].empty: 
@@ -565,6 +563,6 @@ else:
         st.download_button(
             "📥 下载完整结果 (Excel)",
             data=buffer.getvalue(),
-            file_name=f"FastAnalysis_Result.xlsx",
+            file_name=f"Analysis_Result.xlsx",
             mime="application/vnd.ms-excel"
         )
