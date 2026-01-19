@@ -395,7 +395,7 @@ def process_results_to_dfs(results_list, factors, test_factor, valid_targets, wo
 # 4. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="极速数据分析", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
 st.title("⚡ 极速统计分析 (Pro)")
 
 # 侧边栏
@@ -566,3 +566,4 @@ else:
             file_name=f"Analysis_Result.xlsx",
             mime="application/vnd.ms-excel"
         )
+
