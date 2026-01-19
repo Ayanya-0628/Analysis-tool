@@ -453,8 +453,8 @@ def process_results_to_dfs(results_list, factor_orders, factors, test_factor, va
 # 4. Streamlit 界面
 # ==========================================
 
-st.set_page_config(page_title="极速数据分析", layout="wide", page_icon="⚡")
-st.title("⚡ 极速统计分析 (Pro)")
+st.set_page_config(page_title="数据分析", layout="wide", page_icon="⚡")
+st.title("⚡统计分析")
 
 if 'run_analysis' not in st.session_state:
     st.session_state.run_analysis = False
@@ -625,3 +625,4 @@ else:
             file_name=f"Analysis_Result.xlsx",
             mime="application/vnd.ms-excel"
         )
+
